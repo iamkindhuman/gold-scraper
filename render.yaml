@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: gold-scraper
+    env: node
+    plan: free
+    buildCommand: npm install && npx playwright install --with-deps
+    startCommand: npm start
