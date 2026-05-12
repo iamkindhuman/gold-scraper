@@ -1,0 +1,14 @@
+{
+  "name": "gold-scraper",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "playwright": "^1.40.0",
+    "cors": "^2.8.5"
+  }
+}
