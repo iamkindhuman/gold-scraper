@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import axios from "axios";
+import { chromium } from "playwright";
 
 const app = express();
 app.use(cors());
@@ -11,53 +11,38 @@ let cache = {
   success: false
 };
 
-async function getAjaxUrl() {
-  try {
-    const res = await axios.get("https://msgold.com.my/", {
-      headers: {
-        "User-Agent": "Mozilla/5.0"
-      }
-    });
-
-    const html = res.data;
-
-    // extract FULL ajax url dynamically
-    const match = html.match(/__ajax2\.php\?fn=refg4[^"']+/);
-
-    if (!match) return null;
-
-    return "https://msgold.com.my/adminxsettings/" + match[0];
-
-  } catch (e) {
-    return null;
-  }
-}
-
 async function scrape() {
+  let browser;
+
   try {
-    console.log("FETCHING DYNAMIC AJAX URL...");
+    console.log("SCRAPING WITH BROWSER...");
 
-    const url = await getAjaxUrl();
-
-    if (!url) throw new Error("AJAX URL NOT FOUND");
-
-    const res = await axios.get(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://msgold.com.my/"
-      }
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
     });
 
-    const text = res.data;
+    const page = await browser.newPage();
 
-    const match = text.match(/updprc\('spn9','([^']+)'\)/);
+    await page.goto("https://msgold.com.my/", {
+      waitUntil: "networkidle"
+    });
+
+    // wait for JS to generate values
+    await page.waitForTimeout(3000);
+
+    const result = await page.evaluate(() => {
+      return {
+        spn9: document.querySelector("#spn9")?.innerText || null
+      };
+    });
 
     cache = {
-      spn9: match?.[1] || null,
+      ...result,
       updated: new Date().toLocaleString("en-MY", {
         timeZone: "Asia/Kuala_Lumpur"
       }),
-      success: !!match
+      success: !!result.spn9
     };
 
     console.log("OK:", cache);
@@ -70,6 +55,9 @@ async function scrape() {
       success: false,
       error: err.message
     };
+
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
@@ -79,7 +67,7 @@ app.get("/gold", async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("Gold Scraper Running (AUTO AJAX DETECTION)");
+  res.send("Gold Scraper Running (BROWSER MODE)");
 });
 
 setInterval(scrape, 30000);
