@@ -4,66 +4,50 @@ const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-let cache = null;
+let cache = {
+  spn9: null,
+  raw: null,
+  updated: null
+};
 
 /**
- * GET dynamic q= value from homepage
- */
-async function getQ() {
-  try {
-    const res = await axios.get("https://msgold.com.my/", {
-      headers: {
-        "User-Agent": "Mozilla/5.0"
-      }
-    });
-
-    const html = res.data;
-
-    // extract q=xxxxxxxx pattern
-    const match = html.match(/q=([a-zA-Z0-9_]+)/);
-
-    if (!match) return null;
-
-    return match[1];
-  } catch (err) {
-    console.log("Q ERROR:", err.message);
-    return null;
-  }
-}
-
-/**
- * CALL AJAX API
+ * FETCH AJAX DATA
  */
 async function fetchGold() {
   try {
-    const q = await getQ();
-    if (!q) return;
-
-    const url = "https://msgold.com.my/adminxsettings/__ajax2.php";
-
-    const res = await axios.get(url, {
-      params: {
-        fn: "refg4",
-        m: "eval",
-        f: "",
-        q,
-        seed: Math.random()
-      },
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://msgold.com.my/"
+    const res = await axios.get(
+      "https://msgold.com.my/adminxsettings/__ajax2.php",
+      {
+        params: {
+          fn: "refg4",
+          m: "eval",
+          f: "",
+          q: "2599_1778738276_d8764a080a726758c42c0850d8d8a9c8", // IMPORTANT FIXED Q
+          seed: Math.random()
+        },
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Referer": "https://msgold.com.my/"
+        }
       }
-    });
+    );
+
+    const raw = res.data;
+
+    // 🔥 EXTRACT spn9 DIRECTLY
+    const match = raw.match(/updprc\('spn9','([\d.,]+)'\)/);
+
+    const spn9 = match ? match[1].replace(/,/g, "") : null;
 
     cache = {
-      q,
-      data: res.data,
+      spn9,
+      raw,
       updated: new Date().toISOString()
     };
 
-    console.log("UPDATED:", cache.updated);
+    console.log("SPN9:", spn9, "| Updated:", cache.updated);
   } catch (err) {
-    console.log("AJAX ERROR:", err.message);
+    console.log("ERROR:", err.message);
   }
 }
 
@@ -84,10 +68,10 @@ app.get("/", (req, res) => {
 });
 
 /**
- * OUTPUT API
+ * API OUTPUT (FOR YOUR PHP/FRONTEND)
  */
 app.get("/gold", (req, res) => {
-  if (!cache) {
+  if (!cache.spn9) {
     return res.status(503).json({
       success: false,
       message: "No data yet"
@@ -96,7 +80,8 @@ app.get("/gold", (req, res) => {
 
   res.json({
     success: true,
-    result: cache
+    spn9: cache.spn9,
+    updated: cache.updated
   });
 });
 
@@ -104,5 +89,5 @@ app.get("/gold", (req, res) => {
  * START SERVER
  */
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("RUNNING ON PORT:", PORT);
+  console.log("RUNNING ON PORT", PORT);
 });
