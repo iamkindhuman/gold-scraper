@@ -20,9 +20,10 @@ async function scrape() {
 
   try {
 
-    console.log("Starting scrape...");
+    console.log("SCRAPING START");
 
     browser = await chromium.launch({
+      executablePath: "/opt/render/.cache/ms-playwright/chromium-1223/chrome-linux/chrome",
       headless: true,
       args: [
         "--no-sandbox",
@@ -33,30 +34,19 @@ async function scrape() {
     });
 
     const page = await browser.newPage({
-
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-
     });
 
     await page.goto("https://msgold.com.my/", {
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle",
       timeout: 60000
     });
 
-    console.log("Website loaded");
-
     await page.waitForTimeout(10000);
-
-    const html = await page.content();
-
-    console.log("HTML length:", html.length);
 
     const buy = await page.locator("#spn9").textContent();
     const sell = await page.locator("#spn10").textContent();
-
-    console.log("BUY:", buy);
-    console.log("SELL:", sell);
 
     cache = {
       buy: buy?.trim(),
@@ -68,17 +58,21 @@ async function scrape() {
       error: null
     };
 
-    await browser.close();
+    console.log("SUCCESS:", cache);
 
-    console.log("SUCCESS");
+    await browser.close();
 
   } catch (err) {
 
-    console.log("FULL ERROR:");
-    console.log(err);
+    console.log("ERROR:", err.message);
 
-    cache.success = false;
-    cache.error = err.message;
+    cache = {
+      buy: null,
+      sell: null,
+      updated: null,
+      success: false,
+      error: err.message
+    };
 
     if (browser) {
       await browser.close();
@@ -88,8 +82,10 @@ async function scrape() {
 
 }
 
+// first run
 await scrape();
 
+// every 1 minute
 setInterval(scrape, 60000);
 
 app.get("/", (req, res) => {
@@ -103,5 +99,5 @@ app.get("/gold", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Server running on", PORT);
+  console.log("SERVER RUNNING:", PORT);
 });
