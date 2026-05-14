@@ -97,8 +97,6 @@ function parseGoldData(rawData) {
     // Remove outer quotes if present
     dataStr = dataStr.replace(/^["']|["']$/g, '');
     
-    console.log('Parsing data string, length:', dataStr.length);
-    
     // Look for updprc('spn9','XXX.XX') pattern
     const spn9Match = dataStr.match(/updprc\('spn9','([\d,]+\.?\d*)'\)/);
     
@@ -129,32 +127,25 @@ function parseGoldData(rawData) {
     return null;
 }
 
-app.get('/gold', async (req, res) => {
+// Auto-fetch function that runs every 10 seconds
+async function autoFetchGoldPrice() {
     try {
         const now = Date.now();
         
-        // Return cached data if fresh
-        if (cachedGoldData && (now - lastGoldFetch) < GOLD_CACHE_DURATION) {
-            console.log('Returning cached gold data');
-            return res.json(cachedGoldData);
-        }
-        
         // Get fresh prefix if URL is old
-        let prefix = null;
         let hash = AJAX_HASH;
         
         if (!cachedAjaxUrl || (now - lastUrlFetch) > URL_CACHE_DURATION) {
             const params = await extractPrefix();
             if (params) {
-                prefix = params.prefix;
                 hash = params.hash;
-                cachedAjaxUrl = generateAjaxUrl(prefix, hash);
+                cachedAjaxUrl = generateAjaxUrl(params.prefix, hash);
                 lastUrlFetch = now;
-                console.log('Generated new URL:', cachedAjaxUrl);
+                console.log('🔄 Generated new URL:', cachedAjaxUrl);
             }
         }
         
-        // If no URL yet, try with last known prefix
+        // If no URL yet, try to generate one
         if (!cachedAjaxUrl) {
             // Try a few common prefixes
             for (let testPrefix of ['3581', '794', '1360', '2104']) {
@@ -166,61 +157,82 @@ app.get('/gold', async (req, res) => {
                 if (rawData) {
                     const spn9 = parseGoldData(rawData);
                     if (spn9) {
-                        console.log('Found working prefix:', testPrefix);
+                        console.log('✅ Found working prefix:', testPrefix);
                         break;
                     }
                 }
-                console.log('Prefix', testPrefix, 'failed');
             }
         }
         
         // Fetch with current URL
-        let rawData = null;
         if (cachedAjaxUrl) {
-            rawData = await fetchGoldData(cachedAjaxUrl);
-        }
-        
-        // If failed, try fresh extraction
-        if (!rawData) {
+            const rawData = await fetchGoldData(cachedAjaxUrl);
+            
+            if (rawData) {
+                const spn9 = parseGoldData(rawData);
+                
+                if (spn9) {
+                    // Update cached data
+                    cachedGoldData = {
+                        success: true,
+                        spn9: spn9,
+                        updated: new Date().toISOString(),
+                        timestamp: Date.now()
+                    };
+                    lastGoldFetch = Date.now();
+                    console.log('✅ Auto-fetched gold price (spn9):', spn9);
+                    return;
+                }
+            }
+            
+            // If fetch failed, try fresh extraction
             console.log('Fetch failed, trying fresh extraction...');
             const params = await extractPrefix();
             if (params) {
                 cachedAjaxUrl = generateAjaxUrl(params.prefix, params.hash);
                 lastUrlFetch = now;
-                rawData = await fetchGoldData(cachedAjaxUrl);
+                const rawData = await fetchGoldData(cachedAjaxUrl);
+                if (rawData) {
+                    const spn9 = parseGoldData(rawData);
+                    if (spn9) {
+                        cachedGoldData = {
+                            success: true,
+                            spn9: spn9,
+                            updated: new Date().toISOString(),
+                            timestamp: Date.now()
+                        };
+                        lastGoldFetch = Date.now();
+                        console.log('✅ Fresh extraction - Gold price (spn9):', spn9);
+                    }
+                }
             }
         }
         
-        if (!rawData) {
-            return res.json({
-                success: false,
-                error: 'Could not fetch gold data',
-                debug_url: cachedAjaxUrl
-            });
+    } catch (error) {
+        console.error('Auto-fetch error:', error.message);
+    }
+}
+
+app.get('/gold', async (req, res) => {
+    try {
+        // If we have cached data, return it immediately
+        if (cachedGoldData) {
+            console.log('📤 Serving cached gold data:', cachedGoldData.spn9);
+            return res.json(cachedGoldData);
         }
         
-        const spn9 = parseGoldData(rawData);
+        // If no cached data, do an immediate fetch
+        console.log('No cached data, doing immediate fetch...');
+        await autoFetchGoldPrice();
         
-        if (!spn9) {
-            return res.json({
+        if (cachedGoldData) {
+            res.json(cachedGoldData);
+        } else {
+            res.json({
                 success: false,
-                error: 'Could not parse gold price',
-                raw_data_preview: typeof rawData === 'string' ? rawData.substring(0, 300) : JSON.stringify(rawData).substring(0, 300)
+                error: 'Could not fetch gold data'
             });
         }
-        
-        const responseData = {
-            success: true,
-            spn9: spn9,
-            updated: new Date().toISOString(),
-            timestamp: now
-        };
-        
-        cachedGoldData = responseData;
-        lastGoldFetch = now;
-        
-        console.log('✅ Gold price (spn9):', spn9);
-        res.json(responseData);
         
     } catch (error) {
         console.error('Server error:', error);
@@ -233,7 +245,6 @@ app.get('/gold', async (req, res) => {
 
 app.get('/debug', async (req, res) => {
     try {
-        // Extract prefix
         const response = await axios.get('https://msgold.com.my/', {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -277,7 +288,9 @@ app.get('/debug', async (req, res) => {
             success: true,
             extracted_params: match ? { prefix: match[1], hash: match[2] } : null,
             test_result: testResult,
-            cached_ajax_url: cachedAjaxUrl
+            cached_ajax_url: cachedAjaxUrl,
+            cached_gold_data: cachedGoldData,
+            auto_fetch_active: autoFetchInterval !== null
         });
         
     } catch (error) {
@@ -292,42 +305,44 @@ app.get('/', (req, res) => {
     res.json({
         status: 'online',
         service: 'Gold Price Scraper',
-        version: '1.2.0',
+        version: '2.0.0',
         uptime: process.uptime(),
         cached_url: cachedAjaxUrl || 'No',
         last_url_fetch: lastUrlFetch ? new Date(lastUrlFetch).toISOString() : 'Never',
         last_gold_fetch: lastGoldFetch ? new Date(lastGoldFetch).toISOString() : 'Never',
-        cached_data: cachedGoldData ? 'Yes' : 'No'
+        cached_data: cachedGoldData ? cachedGoldData.spn9 : null,
+        auto_refresh_interval: '10 seconds',
+        auto_fetch_active: autoFetchInterval !== null
     });
 });
 
+// Start the auto-fetch interval
+let autoFetchInterval = null;
+
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Gold Price Server v1.2.0 running on port ${PORT}`);
+    console.log(`Gold Price Server v2.0.0 running on port ${PORT}`);
+    console.log('Auto-refresh: Every 10 seconds');
     
-    // Initial fetch on startup
-    setTimeout(async () => {
-        console.log('Performing initial fetch...');
-        const params = await extractPrefix();
-        if (params) {
-            cachedAjaxUrl = generateAjaxUrl(params.prefix, params.hash);
-            lastUrlFetch = Date.now();
-            console.log('Initial URL:', cachedAjaxUrl);
-            
-            // Try to get initial data
-            const rawData = await fetchGoldData(cachedAjaxUrl);
-            if (rawData) {
-                const spn9 = parseGoldData(rawData);
-                if (spn9) {
-                    cachedGoldData = {
-                        success: true,
-                        spn9: spn9,
-                        updated: new Date().toISOString(),
-                        timestamp: Date.now()
-                    };
-                    lastGoldFetch = Date.now();
-                    console.log('Initial gold price cached:', spn9);
-                }
-            }
-        }
-    }, 3000);
+    // Do initial fetch immediately
+    console.log('Performing initial fetch...');
+    autoFetchGoldPrice().then(() => {
+        console.log('Initial fetch complete');
+    });
+    
+    // Set up auto-fetch every 10 seconds
+    autoFetchInterval = setInterval(() => {
+        console.log('⏰ Auto-fetch timer triggered...');
+        autoFetchGoldPrice();
+    }, 10000); // 10 seconds
+    
+    console.log('Auto-fetch interval set to 10 seconds');
+});
+
+// Keep the process alive
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
