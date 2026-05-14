@@ -1,12 +1,12 @@
 const express = require("express");
-const { chromium } = require("playwright");
 
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 10000;
+// 🔥 MUST USE RENDER PORT EXACTLY
+const PORT = process.env.PORT;
 
-// ---------------- GLOBAL SAFETY ----------------
+// ---------------- SAFETY NET (PREVENT EXIT 1) ----------------
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT:", err);
 });
@@ -24,12 +24,14 @@ app.get("/", (req, res) => {
   });
 });
 
-// ---------------- SCRAPER (SAFE MODE) ----------------
+// ---------------- LAZY LOAD PLAYWRIGHT ----------------
 app.get("/scrape", async (req, res) => {
   let browser;
 
   try {
     console.log("SCRAPE START");
+
+    const { chromium } = require("playwright");
 
     browser = await chromium.launch({
       headless: true,
@@ -74,7 +76,7 @@ app.get("/scrape", async (req, res) => {
   }
 });
 
-// ---------------- IMPORTANT: RENDER FIX ----------------
+// ---------------- START SERVER (CRITICAL) ----------------
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`RUNNING ON PORT: ${PORT}`);
+  console.log("RUNNING ON PORT:", PORT);
 });
