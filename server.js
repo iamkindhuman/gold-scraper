@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { chromium } from "playwright";
+import { execSync } from "child_process";
 
 const app = express();
 app.use(cors());
@@ -18,16 +19,27 @@ let cache = {
 };
 
 let isScraping = false;
-
-// cache TTL (1 minute)
 const CACHE_TTL = 60 * 1000;
 
 // --------------------
-// SAFE SCRAPER
+// FORCE PLAYWRIGHT BROWSER INSTALL (SAFE)
+// --------------------
+try {
+  console.log("Checking Playwright browsers...");
+  execSync("npx playwright install chromium", {
+    stdio: "inherit"
+  });
+  console.log("Playwright browser ready");
+} catch (err) {
+  console.log("Playwright install skipped/failed but continuing...");
+}
+
+// --------------------
+// SCRAPER
 // --------------------
 async function scrape() {
   if (isScraping) {
-    console.log("SKIP: scrape already running");
+    console.log("SKIP: already scraping");
     return cache;
   }
 
@@ -39,12 +51,15 @@ async function scrape() {
 
     browser = await chromium.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage"
+      ]
     });
 
     const page = await browser.newPage();
 
-    // wait AJAX safely
     const responsePromise = page.waitForResponse(
       (res) =>
         res.url().includes("__ajax2.php") &&
@@ -69,8 +84,8 @@ async function scrape() {
     };
 
     console.log("SUCCESS:", cache);
-
     return cache;
+
   } catch (err) {
     console.log("ERROR:", err.message);
 
@@ -82,6 +97,7 @@ async function scrape() {
     };
 
     return cache;
+
   } finally {
     isScraping = false;
     if (browser) await browser.close();
@@ -89,7 +105,7 @@ async function scrape() {
 }
 
 // --------------------
-// SMART GET (CACHE FIRST)
+// SMART CACHE LAYER
 // --------------------
 async function getData() {
   const now = Date.now();
@@ -102,10 +118,10 @@ async function getData() {
 }
 
 // --------------------
-// API ROUTES
+// ROUTES
 // --------------------
 app.get("/", (req, res) => {
-  res.send("Gold Scraper Running (STABLE MODE)");
+  res.send("Gold Scraper Running (STABLE PLAYWRIGHT MODE)");
 });
 
 app.get("/gold", async (req, res) => {
