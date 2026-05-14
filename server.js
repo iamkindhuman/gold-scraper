@@ -1,128 +1,122 @@
-const express = require("express");
-const axios = require("axios");
+// gold_scraper.js
+const axios = require('axios');
+const cheerio = require('cheerio');
+const express = require('express');
+const cors = require('cors');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+app.use(cors());
 
-let cache = {
-  spn9: null,
-  updated: null
-};
+let cachedAjaxUrl = null;
+let lastUrlFetch = 0;
+const URL_CACHE_DURATION = 60000; // 1 minute
 
-/**
- * SAFE Q FETCH
- */
-async function getLiveQ() {
-  try {
-    const res = await axios.get("https://msgold.com.my/", {
-      timeout: 10000,
-      headers: {
-        "User-Agent": "Mozilla/5.0"
-      }
-    });
-
-    const match = res.data.match(/q=([a-zA-Z0-9_]+)/);
-    return match ? match[1] : null;
-
-  } catch (e) {
-    console.log("Q FAIL:", e.message);
-    return null;
-  }
-}
-
-/**
- * SAFE FETCH GOLD
- */
-async function fetchGold() {
-  try {
-    const q = await getLiveQ();
-    if (!q) return;
-
-    const res = await axios.get(
-      "https://msgold.com.my/adminxsettings/__ajax2.php",
-      {
-        timeout: 10000,
-        params: {
-          fn: "refg4",
-          m: "eval",
-          f: "",
-          q,
-          seed: Math.random()
-        },
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          "Referer": "https://msgold.com.my/"
+async function extractAjaxUrl() {
+    try {
+        const response = await axios.get('https://msgold.com.my/', {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+        
+        const html = response.data;
+        
+        // Extract all script contents
+        const $ = cheerio.load(html);
+        let ajaxUrl = null;
+        
+        // Search in script tags
+        $('script').each((i, elem) => {
+            const content = $(elem).html();
+            if (content) {
+                // Look for AJAX URL patterns
+                const matches = content.match(/__ajax2\.php\?[^"'\s]+/g);
+                if (matches) {
+                    ajaxUrl = matches[matches.length - 1];
+                }
+            }
+        });
+        
+        // Also search in the entire HTML
+        if (!ajaxUrl) {
+            const matches = html.match(/adminxsettings\/__ajax2\.php\?[^"'\s]+/g);
+            if (matches) {
+                ajaxUrl = matches[matches.length - 1];
+            }
         }
-      }
-    );
-
-    const match = res.data.match(/updprc\('spn9','([\d.,]+)'\)/);
-
-    if (!match) {
-      console.log("Invalid AJAX response (likely expired q)");
-      return;
+        
+        return ajaxUrl;
+    } catch (error) {
+        console.error('Error extracting URL:', error);
+        return null;
     }
-
-    cache.spn9 = match[1].replace(/,/g, "");
-    cache.updated = new Date().toISOString();
-
-    console.log("SPN9:", cache.spn9);
-
-  } catch (e) {
-    console.log("AJAX FAIL:", e.message);
-  }
 }
 
-/**
- * LOOP (SAFE WRAPPED)
- */
-setInterval(() => {
-  fetchGold().catch(() => {});
-}, 10000);
+async function fetchGoldData(ajaxPath) {
+    try {
+        const url = `https://msgold.com.my/${ajaxPath}`;
+        const response = await axios.get(url, {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Referer': 'https://msgold.com.my/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+        
+        return response.data;
+    } catch (error) {
+        console.error('Error fetching gold data:', error);
+        return null;
+    }
+}
 
-/**
- * STARTUP DELAY (IMPORTANT FOR RENDER)
- */
-setTimeout(fetchGold, 3000);
-
-/**
- * ROUTES
- */
-app.get("/", (req, res) => {
-  res.json({
-    status: "alive"
-  });
+app.get('/gold', async (req, res) => {
+    try {
+        // Check if we need to refresh the AJAX URL
+        const now = Date.now();
+        if (!cachedAjaxUrl || (now - lastUrlFetch) > URL_CACHE_DURATION) {
+            cachedAjaxUrl = await extractAjaxUrl();
+            lastUrlFetch = now;
+        }
+        
+        if (!cachedAjaxUrl) {
+            return res.json({ success: false, error: 'Could not extract AJAX URL' });
+        }
+        
+        const data = await fetchGoldData(cachedAjaxUrl);
+        
+        if (data) {
+            // Try to parse and structure the data
+            let spn9 = null;
+            
+            // If the response is JSON
+            if (typeof data === 'object') {
+                // Extract spn9 or relevant values based on actual response structure
+                spn9 = data.spn9 || data.price || null;
+            } 
+            // If it's a string with numbers
+            else if (typeof data === 'string') {
+                const matches = data.match(/\d+\.?\d*/g);
+                if (matches && matches.length > 0) {
+                    spn9 = parseFloat(matches[0]);
+                }
+            }
+            
+            res.json({
+                success: true,
+                spn9: spn9 || data,
+                updated: new Date().toISOString(),
+                source_url: cachedAjaxUrl
+            });
+        } else {
+            res.json({ success: false, error: 'Failed to fetch data' });
+        }
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
 });
 
-app.get("/gold", (req, res) => {
-  if (!cache.spn9) {
-    return res.json({
-      success: false,
-      message: "No data yet"
-    });
-  }
-
-  res.json({
-    success: true,
-    spn9: cache.spn9,
-    updated: cache.updated
-  });
-});
-
-/**
- * CRASH PROTECTION
- */
-process.on("uncaughtException", err => {
-  console.log("UNCAUGHT:", err.message);
-});
-
-process.on("unhandledRejection", err => {
-  console.log("REJECTION:", err);
-});
-
-/**
- * START SERVER
- */
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("RUNNING ON PORT", PORT);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Gold price server running on port ${PORT}`);
 });
