@@ -2,76 +2,57 @@ const express = require("express");
 const { chromium } = require("playwright");
 
 const app = express();
-app.use(express.json());
-
 const PORT = process.env.PORT || 10000;
 
-// Health check
 app.get("/", (req, res) => {
-  res.json({
-    status: "alive",
-    service: "gold-scraper",
-    time: new Date().toISOString(),
-  });
+  res.json({ status: "alive" });
 });
 
-// MAIN SCRAPER
 app.get("/scrape", async (req, res) => {
   let browser;
 
   try {
-    console.log("SCRAPE START");
-
     browser = await chromium.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage"
+      ]
     });
 
     const page = await browser.newPage();
 
-    let ajaxResults = [];
+    let ajaxData = [];
 
-    // Capture ALL AJAX responses
     page.on("response", async (response) => {
-      const url = response.url();
-
-      if (url.includes("__ajax2.php")) {
+      if (response.url().includes("__ajax2.php")) {
         try {
-          const text = await response.text();
-
-          ajaxResults.push({
-            url,
-            data: text,
-            time: new Date().toISOString(),
-          });
+          ajaxData.push(await response.text());
         } catch (e) {}
       }
     });
 
     await page.goto("https://msgold.com.my/", {
-      waitUntil: "networkidle",
-      timeout: 60000,
+      waitUntil: "networkidle"
     });
 
-    // wait for AJAX refresh cycles (important!)
     await page.waitForTimeout(15000);
 
     await browser.close();
 
-    return res.json({
+    res.json({
       success: true,
-      count: ajaxResults.length,
-      result: ajaxResults,
+      data: ajaxData
     });
 
   } catch (err) {
     if (browser) await browser.close();
 
-    console.error(err);
-
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
-      error: err.message,
+      error: err.message
     });
   }
 });
