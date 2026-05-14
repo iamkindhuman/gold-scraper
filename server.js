@@ -15,7 +15,7 @@ async function scrape() {
   let browser;
 
   try {
-    console.log("SCRAPING WITH BROWSER...");
+    console.log("START SCRAPE (PLAYWRIGHT RELIABLE MODE)");
 
     browser = await chromium.launch({
       headless: true,
@@ -24,25 +24,38 @@ async function scrape() {
 
     const page = await browser.newPage();
 
+    // IMPORTANT: capture AJAX response
+    const ajaxPromise = new Promise((resolve) => {
+      page.on("response", async (res) => {
+        const url = res.url();
+
+        if (url.includes("__ajax2.php") && url.includes("fn=refg4")) {
+          try {
+            const text = await res.text();
+            resolve(text);
+          } catch (e) {
+            resolve(null);
+          }
+        }
+      });
+    });
+
     await page.goto("https://msgold.com.my/", {
       waitUntil: "networkidle"
     });
 
-    // wait for JS to generate values
-    await page.waitForTimeout(3000);
+    const ajaxText = await ajaxPromise;
 
-    const result = await page.evaluate(() => {
-      return {
-        spn9: document.querySelector("#spn9")?.innerText || null
-      };
-    });
+    if (!ajaxText) throw new Error("AJAX not captured");
+
+    const match = ajaxText.match(/updprc\('spn9','([^']+)'\)/);
 
     cache = {
-      ...result,
+      spn9: match?.[1] || null,
       updated: new Date().toLocaleString("en-MY", {
         timeZone: "Asia/Kuala_Lumpur"
       }),
-      success: !!result.spn9
+      success: !!match
     };
 
     console.log("OK:", cache);
@@ -55,22 +68,23 @@ async function scrape() {
       success: false,
       error: err.message
     };
-
   } finally {
     if (browser) await browser.close();
   }
 }
 
+// API
 app.get("/gold", async (req, res) => {
   await scrape();
   res.json(cache);
 });
 
 app.get("/", (req, res) => {
-  res.send("Gold Scraper Running (BROWSER MODE)");
+  res.send("Gold Scraper Running (ROBUST MODE)");
 });
 
-setInterval(scrape, 30000);
+// auto refresh
+setInterval(scrape, 15000);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("RUNNING:", PORT));
