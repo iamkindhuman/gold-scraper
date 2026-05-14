@@ -10,15 +10,40 @@ app.use(cors({
     methods: ['GET']
 }));
 
+// Memory-optimized cache variables
 let cachedAjaxUrl = null;
 let lastUrlFetch = 0;
-const URL_CACHE_DURATION = 3000;
+const URL_CACHE_DURATION = 5000; // 5 seconds
 let cachedGoldData = null;
 let lastGoldFetch = 0;
 const GOLD_CACHE_DURATION = 2000;
+const FETCH_INTERVAL = 15000; // 15 seconds
+const MAX_CACHE_AGE = 60000; // Clear cache after 1 minute
 
 // Known hash from the website
 const AJAX_HASH = 'c7345ad4580290c2971b1a5b43b0db0a';
+
+// Memory cleanup function
+function clearMemoryCache() {
+    const now = Date.now();
+    
+    // Clear old AJAX URL
+    if (cachedAjaxUrl && (now - lastUrlFetch) > MAX_CACHE_AGE) {
+        cachedAjaxUrl = null;
+        console.log('🧹 Cleared old AJAX URL cache');
+    }
+    
+    // Clear old gold data
+    if (cachedGoldData && (now - lastGoldFetch) > MAX_CACHE_AGE) {
+        cachedGoldData = null;
+        console.log('🧹 Cleared old gold data cache');
+    }
+    
+    // Force garbage collection hint
+    if (global.gc) {
+        global.gc();
+    }
+}
 
 // Function to extract prefix from the page
 async function extractPrefix() {
@@ -36,6 +61,9 @@ async function extractPrefix() {
         });
         
         const html = response.data;
+        
+        // Clear response data immediately to free memory
+        response.data = null;
         
         // Look for: ajax("refg4","PREFIX_"+s+"_HASH","eval","","");
         const match = html.match(/ajax\("refg4","(\d+)_"\+s\+"_([a-f0-9]+)"/);
@@ -80,7 +108,12 @@ async function fetchGoldData(url) {
             timeout: 10000
         });
         
-        return response.data;
+        const data = response.data;
+        
+        // Clear response object to free memory
+        response.data = null;
+        
+        return data;
         
     } catch (error) {
         console.error('Fetch error:', error.message);
@@ -127,10 +160,13 @@ function parseGoldData(rawData) {
     return null;
 }
 
-// Auto-fetch function that runs every 10 seconds
+// Auto-fetch function that runs every 15 seconds
 async function autoFetchGoldPrice() {
     try {
         const now = Date.now();
+        
+        // Memory cleanup check
+        clearMemoryCache();
         
         // Get fresh prefix if URL is old
         let hash = AJAX_HASH;
@@ -161,6 +197,8 @@ async function autoFetchGoldPrice() {
                         break;
                     }
                 }
+                // If prefix didn't work, reset URL
+                cachedAjaxUrl = null;
             }
         }
         
@@ -172,15 +210,25 @@ async function autoFetchGoldPrice() {
                 const spn9 = parseGoldData(rawData);
                 
                 if (spn9) {
-                    // Update cached data
-                    cachedGoldData = {
-                        success: true,
-                        spn9: spn9,
-                        updated: new Date().toISOString(),
-                        timestamp: Date.now()
-                    };
-                    lastGoldFetch = Date.now();
-                    console.log('✅ Auto-fetched gold price (spn9):', spn9);
+                    // Only update if value changed (reduces memory operations)
+                    if (!cachedGoldData || cachedGoldData.spn9 !== spn9) {
+                        cachedGoldData = {
+                            success: true,
+                            spn9: spn9,
+                            updated: new Date().toISOString(),
+                            timestamp: Date.now()
+                        };
+                        lastGoldFetch = Date.now();
+                        console.log('✅ Updated gold price (spn9):', spn9);
+                    } else {
+                        // Update timestamp only
+                        if (cachedGoldData) {
+                            cachedGoldData.updated = new Date().toISOString();
+                            cachedGoldData.timestamp = Date.now();
+                        }
+                        lastGoldFetch = Date.now();
+                        console.log('💲 Gold price unchanged (spn9):', spn9);
+                    }
                     return;
                 }
             }
@@ -208,8 +256,52 @@ async function autoFetchGoldPrice() {
             }
         }
         
+        // Clear local variables to help garbage collection
+        rawData = null;
+        hash = null;
+        
     } catch (error) {
         console.error('Auto-fetch error:', error.message);
+    }
+}
+
+// Heartbeat function to keep Render alive
+function heartbeat() {
+    console.log('💓 Heartbeat - Service alive at', new Date().toISOString());
+    
+    // Log memory usage if available
+    if (process.memoryUsage) {
+        const mem = process.memoryUsage();
+        console.log(`📊 Memory: ${Math.round(mem.heapUsed / 1024 / 1024)}MB / ${Math.round(mem.heapTotal / 1024 / 1024)}MB`);
+    }
+    
+    // Clean old caches
+    clearMemoryCache();
+}
+
+// Self-ping to prevent sleep
+async function selfPing() {
+    try {
+        const http = require('http');
+        const options = {
+            hostname: 'localhost',
+            port: PORT,
+            path: '/',
+            method: 'GET',
+            timeout: 5000
+        };
+        
+        const req = http.request(options, (res) => {
+            console.log('🔔 Self-ping successful - Status:', res.statusCode);
+        });
+        
+        req.on('error', (error) => {
+            console.error('Self-ping error:', error.message);
+        });
+        
+        req.end();
+    } catch (error) {
+        console.error('Self-ping failed:', error.message);
     }
 }
 
@@ -243,6 +335,27 @@ app.get('/gold', async (req, res) => {
     }
 });
 
+app.get('/health', (req, res) => {
+    const mem = process.memoryUsage();
+    res.json({
+        status: 'healthy',
+        uptime: process.uptime(),
+        memory: {
+            heapUsed: Math.round(mem.heapUsed / 1024 / 1024) + 'MB',
+            heapTotal: Math.round(mem.heapTotal / 1024 / 1024) + 'MB',
+            rss: Math.round(mem.rss / 1024 / 1024) + 'MB'
+        },
+        cache: {
+            hasUrl: cachedAjaxUrl !== null,
+            hasData: cachedGoldData !== null,
+            urlAge: cachedAjaxUrl ? Math.round((Date.now() - lastUrlFetch) / 1000) + 's' : 'none',
+            dataAge: cachedGoldData ? Math.round((Date.now() - lastGoldFetch) / 1000) + 's' : 'none'
+        },
+        last_gold_price: cachedGoldData ? cachedGoldData.spn9 : null,
+        last_updated: cachedGoldData ? cachedGoldData.updated : null
+    });
+});
+
 app.get('/debug', async (req, res) => {
     try {
         const response = await axios.get('https://msgold.com.my/', {
@@ -253,6 +366,8 @@ app.get('/debug', async (req, res) => {
         });
         
         const html = response.data;
+        response.data = null; // Clear memory
+        
         const match = html.match(/ajax\("refg4","(\d+)_"\+s\+"_([a-f0-9]+)"/);
         
         let testResult = null;
@@ -272,6 +387,8 @@ app.get('/debug', async (req, res) => {
                 });
                 
                 const data = typeof testResponse.data === 'string' ? testResponse.data : JSON.stringify(testResponse.data);
+                testResponse.data = null; // Clear memory
+                
                 const spn9Match = data.match(/updprc\('spn9','([\d,]+\.?\d*)'\)/);
                 
                 testResult = {
@@ -284,13 +401,20 @@ app.get('/debug', async (req, res) => {
             }
         }
         
+        const mem = process.memoryUsage();
+        
         res.json({
             success: true,
             extracted_params: match ? { prefix: match[1], hash: match[2] } : null,
             test_result: testResult,
             cached_ajax_url: cachedAjaxUrl,
             cached_gold_data: cachedGoldData,
-            auto_fetch_active: autoFetchInterval !== null
+            auto_fetch_active: autoFetchInterval !== null,
+            heartbeat_active: heartbeatInterval !== null,
+            memory: {
+                heapUsed: Math.round(mem.heapUsed / 1024 / 1024) + 'MB',
+                heapTotal: Math.round(mem.heapTotal / 1024 / 1024) + 'MB'
+            }
         });
         
     } catch (error) {
@@ -302,47 +426,86 @@ app.get('/debug', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
+    const mem = process.memoryUsage();
     res.json({
         status: 'online',
         service: 'Gold Price Scraper',
-        version: '2.0.0',
-        uptime: process.uptime(),
+        version: '3.0.0',
+        uptime: Math.round(process.uptime()) + ' seconds',
+        memory: Math.round(mem.heapUsed / 1024 / 1024) + 'MB',
         cached_url: cachedAjaxUrl || 'No',
         last_url_fetch: lastUrlFetch ? new Date(lastUrlFetch).toISOString() : 'Never',
         last_gold_fetch: lastGoldFetch ? new Date(lastGoldFetch).toISOString() : 'Never',
         cached_data: cachedGoldData ? cachedGoldData.spn9 : null,
-        auto_refresh_interval: '10 seconds',
-        auto_fetch_active: autoFetchInterval !== null
+        fetch_interval: '15 seconds',
+        heartbeat_interval: '10 minutes',
+        auto_fetch_active: autoFetchInterval !== null,
+        heartbeat_active: heartbeatInterval !== null
     });
 });
 
-// Start the auto-fetch interval
+// Start intervals
 let autoFetchInterval = null;
+let heartbeatInterval = null;
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Gold Price Server v2.0.0 running on port ${PORT}`);
-    console.log('Auto-refresh: Every 10 seconds');
+    console.log(`🚀 Gold Price Server v3.0.0 running on port ${PORT}`);
+    console.log('⚙️ Configuration:');
+    console.log('   - Fetch Interval: 15 seconds');
+    console.log('   - URL Cache: 5 seconds');
+    console.log('   - Max Cache Age: 60 seconds');
+    console.log('   - Heartbeat: Every 10 minutes');
     
     // Do initial fetch immediately
-    console.log('Performing initial fetch...');
+    console.log('📡 Performing initial fetch...');
     autoFetchGoldPrice().then(() => {
-        console.log('Initial fetch complete');
+        console.log('✅ Initial fetch complete');
     });
     
-    // Set up auto-fetch every 10 seconds
+    // Set up auto-fetch every 15 seconds
     autoFetchInterval = setInterval(() => {
         console.log('⏰ Auto-fetch timer triggered...');
         autoFetchGoldPrice();
-    }, 10000); // 10 seconds
+    }, FETCH_INTERVAL);
     
-    console.log('Auto-fetch interval set to 10 seconds');
+    // Set up heartbeat every 10 minutes (keeps Render alive)
+    heartbeatInterval = setInterval(() => {
+        heartbeat();
+        selfPing();
+    }, 600000); // 10 minutes
+    
+    // Memory cleanup every 5 minutes
+    setInterval(() => {
+        clearMemoryCache();
+    }, 300000); // 5 minutes
+    
+    console.log('✅ All intervals configured');
+    console.log('💚 Service ready for long-term operation');
 });
 
-// Keep the process alive
+// Keep the process alive and handle errors gracefully
 process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
+    console.error('❌ Uncaught Exception:', error.message);
+    // Don't exit, keep running
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('❌ Unhandled Rejection:', reason);
+    // Don't exit, keep running
 });
+
+process.on('SIGTERM', () => {
+    console.log('👋 SIGTERM received. Cleaning up...');
+    if (autoFetchInterval) clearInterval(autoFetchInterval);
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    process.exit(0);
+});
+
+process.on('SIGINT', () => {
+    console.log('👋 SIGINT received. Cleaning up...');
+    if (autoFetchInterval) clearInterval(autoFetchInterval);
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    process.exit(0);
+});
+
+console.log('🛡️ Error handlers configured');
