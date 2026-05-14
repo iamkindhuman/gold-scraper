@@ -15,7 +15,7 @@ async function scrape() {
   let browser;
 
   try {
-    console.log("START SCRAPE (PLAYWRIGHT RELIABLE MODE)");
+    console.log("SCRAPE START (ULTRA STABLE MODE)");
 
     browser = await chromium.launch({
       headless: true,
@@ -24,31 +24,21 @@ async function scrape() {
 
     const page = await browser.newPage();
 
-    // IMPORTANT: capture AJAX response
-    const ajaxPromise = new Promise((resolve) => {
-      page.on("response", async (res) => {
-        const url = res.url();
+    // wait specifically for AJAX response
+    const [response] = await Promise.all([
+      page.waitForResponse(res =>
+        res.url().includes("__ajax2.php") &&
+        res.url().includes("fn=refg4")
+      , { timeout: 20000 }),
 
-        if (url.includes("__ajax2.php") && url.includes("fn=refg4")) {
-          try {
-            const text = await res.text();
-            resolve(text);
-          } catch (e) {
-            resolve(null);
-          }
-        }
-      });
-    });
+      page.goto("https://msgold.com.my/", {
+        waitUntil: "domcontentloaded"
+      })
+    ]);
 
-    await page.goto("https://msgold.com.my/", {
-      waitUntil: "networkidle"
-    });
+    const text = await response.text();
 
-    const ajaxText = await ajaxPromise;
-
-    if (!ajaxText) throw new Error("AJAX not captured");
-
-    const match = ajaxText.match(/updprc\('spn9','([^']+)'\)/);
+    const match = text.match(/updprc\('spn9','([^']+)'\)/);
 
     cache = {
       spn9: match?.[1] || null,
@@ -58,7 +48,7 @@ async function scrape() {
       success: !!match
     };
 
-    console.log("OK:", cache);
+    console.log("SUCCESS:", cache);
 
   } catch (err) {
     console.log("ERROR:", err.message);
