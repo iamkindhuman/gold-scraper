@@ -11,22 +11,35 @@ let cache = {
   success: false
 };
 
-// generate dynamic q similar to site pattern
-function generateQ() {
-  const part1 = 8050;
-  const timestamp = Math.floor(Date.now() / 1000);
-  const hash = "01da9b4759d81a47cf8c4f00e5d38451"; // stable part observed
+async function getAjaxUrl() {
+  try {
+    const res = await axios.get("https://msgold.com.my/", {
+      headers: {
+        "User-Agent": "Mozilla/5.0"
+      }
+    });
 
-  return `${part1}_${timestamp}_${hash}`;
+    const html = res.data;
+
+    // extract FULL ajax url dynamically
+    const match = html.match(/__ajax2\.php\?fn=refg4[^"']+/);
+
+    if (!match) return null;
+
+    return "https://msgold.com.my/adminxsettings/" + match[0];
+
+  } catch (e) {
+    return null;
+  }
 }
 
 async function scrape() {
   try {
-    console.log("TRY FETCH AJAX...");
+    console.log("FETCHING DYNAMIC AJAX URL...");
 
-    const q = generateQ();
+    const url = await getAjaxUrl();
 
-    const url = `https://msgold.com.my/adminxsettings/__ajax2.php?fn=refg4&m=eval&f=&q=${q}&seed=${Math.random()}`;
+    if (!url) throw new Error("AJAX URL NOT FOUND");
 
     const res = await axios.get(url, {
       headers: {
@@ -47,7 +60,7 @@ async function scrape() {
       success: !!match
     };
 
-    console.log("RESULT:", cache);
+    console.log("OK:", cache);
 
   } catch (err) {
     console.log("ERROR:", err.message);
@@ -66,7 +79,7 @@ app.get("/gold", async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("Gold Scraper Running (DIRECT AJAX MODE)");
+  res.send("Gold Scraper Running (AUTO AJAX DETECTION)");
 });
 
 setInterval(scrape, 30000);
