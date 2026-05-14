@@ -1,7 +1,7 @@
 services:
   - type: web
-    name: gold-scraper
+    name: pelangi
     env: node
     plan: free
-    buildCommand: npm install && npx playwright install chromium --with-deps
-    startCommand: npm start
+    buildCommand: npm install && npx playwright install chromium
+    startCommand: node server.js
