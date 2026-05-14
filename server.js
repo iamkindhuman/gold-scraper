@@ -14,7 +14,6 @@ app.get("/scrape", async (req, res) => {
   try {
     browser = await chromium.launch({
       headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -35,7 +34,7 @@ app.get("/scrape", async (req, res) => {
     });
 
     await page.goto("https://msgold.com.my/", {
-      waitUntil: "networkidle"
+      waitUntil: "domcontentloaded"
     });
 
     await page.waitForTimeout(15000);
