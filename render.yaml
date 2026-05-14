@@ -8,7 +8,9 @@ services:
     startCommand: node server.js
 
     envVars:
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: /opt/render/.cache/ms-playwright
       - key: NODE_VERSION
         value: 20
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "1"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "/opt/render/.cache/ms-playwright"
