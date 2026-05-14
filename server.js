@@ -1,61 +1,93 @@
 const express = require("express");
-const { chromium } = require("playwright");
+const axios = require("axios");
+const cheerio = require("cheerio");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.get("/", (req, res) => {
-  res.json({ status: "alive" });
-});
+let latestData = null;
 
-app.get("/scrape", async (req, res) => {
-  let browser;
-
+/**
+ * STEP 1: GET PAGE + EXTRACT AJAX "q" VALUE
+ */
+async function getAjaxQuery() {
   try {
-    browser = await chromium.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage"
-      ]
-    });
+    const res = await axios.get("https://msgold.com.my/");
+    const html = res.data;
 
-    const page = await browser.newPage();
+    // Try to find q= value in scripts
+    const match = html.match(/q=([a-zA-Z0-9_]+)/);
 
-    let ajaxData = [];
+    if (!match) {
+      throw new Error("Cannot find q parameter in page");
+    }
 
-    page.on("response", async (response) => {
-      if (response.url().includes("__ajax2.php")) {
-        try {
-          ajaxData.push(await response.text());
-        } catch (e) {}
+    return match[1];
+  } catch (err) {
+    console.error("Failed to extract q:", err.message);
+    return null;
+  }
+}
+
+/**
+ * STEP 2: CALL AJAX ENDPOINT
+ */
+async function fetchGoldData() {
+  try {
+    const q = await getAjaxQuery();
+    if (!q) return;
+
+    const url = `https://msgold.com.my/adminxsettings/__ajax2.php`;
+
+    const res = await axios.get(url, {
+      params: {
+        fn: "refg4",
+        m: "eval",
+        f: "",
+        q: q,
+        seed: Math.random()
+      },
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://msgold.com.my/"
       }
     });
 
-    await page.goto("https://msgold.com.my/", {
-      waitUntil: "domcontentloaded"
-    });
+    latestData = {
+      q,
+      raw: res.data,
+      updated: new Date().toISOString()
+    };
 
-    await page.waitForTimeout(15000);
-
-    await browser.close();
-
-    res.json({
-      success: true,
-      data: ajaxData
-    });
-
+    console.log("UPDATED:", latestData.updated);
   } catch (err) {
-    if (browser) await browser.close();
+    console.error("AJAX ERROR:", err.message);
+  }
+}
 
-    res.status(500).json({
+/**
+ * AUTO RUN EVERY 10 SECONDS
+ */
+setInterval(fetchGoldData, 10000);
+fetchGoldData();
+
+/**
+ * API ENDPOINT
+ */
+app.get("/gold", (req, res) => {
+  if (!latestData) {
+    return res.status(503).json({
       success: false,
-      error: err.message
+      message: "No data yet"
     });
   }
+
+  res.json({
+    success: true,
+    data: latestData
+  });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("RUNNING ON PORT:", PORT);
+  console.log("Server running on port", PORT);
 });
