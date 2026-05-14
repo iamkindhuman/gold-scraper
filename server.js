@@ -7,7 +7,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 
 /* =========================
-   GLOBAL ERROR HANDLERS
+   ERROR HANDLING
 ========================= */
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT:", err);
@@ -18,18 +18,29 @@ process.on("unhandledRejection", (err) => {
 });
 
 /* =========================
-   HEALTH CHECK
+   HOME
 ========================= */
 app.get("/", (req, res) => {
   res.json({
     status: "alive",
     service: "gold-scraper",
-    time: new Date().toISOString(),
   });
 });
 
 /* =========================
-   SCRAPER ENDPOINT
+   GOLD ROUTE (FIX FOR YOU)
+========================= */
+app.get("/gold", (req, res) => {
+  res.json({
+    message: "Use /scrape to get data",
+    endpoints: {
+      scrape: "/scrape"
+    }
+  });
+});
+
+/* =========================
+   SCRAPER
 ========================= */
 app.get("/scrape", async (req, res) => {
   let browser;
@@ -59,8 +70,8 @@ app.get("/scrape", async (req, res) => {
       const text = document.body.innerText || "";
 
       return {
-        title: document.title || null,
-        preview: text.slice(0, 2000),
+        title: document.title,
+        preview: text.slice(0, 1500),
       };
     });
 
@@ -72,14 +83,11 @@ app.get("/scrape", async (req, res) => {
       data,
     });
   } catch (err) {
-    console.error("SCRAPE ERROR:", err);
-
     if (browser) await browser.close();
 
     return res.status(500).json({
       success: false,
       error: err.message,
-      updated: new Date().toISOString(),
     });
   }
 });
@@ -88,5 +96,5 @@ app.get("/scrape", async (req, res) => {
    START SERVER
 ========================= */
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`RUNNING ON PORT: ${PORT}`);
+  console.log("RUNNING ON PORT:", PORT);
 });
