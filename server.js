@@ -13,11 +13,11 @@ let cache = {
   success: false
 };
 
-let browser;
+async function scrape() {
 
-async function getBrowser() {
+  let browser;
 
-  if (!browser) {
+  try {
 
     browser = await chromium.launch({
       headless: true,
@@ -29,23 +29,10 @@ async function getBrowser() {
       ]
     });
 
-  }
-
-  return browser;
-}
-
-async function scrape() {
-
-  let page;
-
-  try {
-
-    const browserInstance = await getBrowser();
-
-    page = await browserInstance.newPage();
+    const page = await browser.newPage();
 
     await page.goto("https://msgold.com.my/", {
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle",
       timeout: 60000
     });
 
@@ -53,7 +40,7 @@ async function scrape() {
       timeout: 30000
     });
 
-    const data = await page.evaluate(() => {
+    const result = await page.evaluate(() => {
 
       return {
         buy: document.querySelector("#spn9")?.innerText?.trim(),
@@ -63,43 +50,45 @@ async function scrape() {
     });
 
     cache = {
-      ...data,
+      buy: result.buy,
+      sell: result.sell,
       updated: new Date().toLocaleString("en-MY", {
         timeZone: "Asia/Kuala_Lumpur"
       }),
       success: true
     };
 
-    console.log("Updated:", cache);
+    console.log(cache);
+
+    await browser.close();
 
   } catch (err) {
 
-    console.error("SCRAPE ERROR:", err.message);
+    console.log("SCRAPE ERROR:");
+    console.log(err);
 
     cache.success = false;
 
-  } finally {
-
-    if (page) {
-      await page.close();
+    if (browser) {
+      await browser.close();
     }
 
   }
 
 }
 
-// First run
-await scrape();
+// initial scrape
+scrape();
 
-// Every 1 minute
+// scrape every 60 sec
 setInterval(scrape, 60000);
-
-app.get("/gold", (req, res) => {
-  res.json(cache);
-});
 
 app.get("/", (req, res) => {
   res.send("Gold Scraper Running");
+});
+
+app.get("/gold", (req, res) => {
+  res.json(cache);
 });
 
 const PORT = process.env.PORT || 3000;
