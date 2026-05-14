@@ -1,16 +1,15 @@
 import express from "express";
 import cors from "cors";
-import { chromium } from "playwright";
-import { execSync } from "child_process";
+import axios from "axios";
 
 const app = express();
 app.use(cors());
 
-const PORT = process.env.PORT || 3000;
-
-// --------------------
-// CACHE
-// --------------------
+/**
+ * =========================
+ * GLOBAL CACHE (ONLY SOURCE OF TRUTH)
+ * =========================
+ */
 let cache = {
   spn9: null,
   updated: null,
@@ -18,120 +17,110 @@ let cache = {
   error: null
 };
 
+/**
+ * =========================
+ * LOCK (PREVENT DOUBLE SCRAPE)
+ * =========================
+ */
 let isScraping = false;
-const CACHE_TTL = 60 * 1000;
 
-// --------------------
-// FORCE PLAYWRIGHT BROWSER INSTALL (SAFE)
-// --------------------
-try {
-  console.log("Checking Playwright browsers...");
-  execSync("npx playwright install chromium", {
-    stdio: "inherit"
-  });
-  console.log("Playwright browser ready");
-} catch (err) {
-  console.log("Playwright install skipped/failed but continuing...");
-}
-
-// --------------------
-// SCRAPER
-// --------------------
+/**
+ * =========================
+ * SAFE SCRAPER (NO INTERVAL CHAOS)
+ * =========================
+ */
 async function scrape() {
-  if (isScraping) {
-    console.log("SKIP: already scraping");
-    return cache;
-  }
-
+  if (isScraping) return; // 🚫 prevent overlapping runs
   isScraping = true;
-  let browser;
 
   try {
-    console.log("SCRAPE START");
+    console.log("SCRAPE START (SAFE MODE)");
 
-    browser = await chromium.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage"
-      ]
+    const url =
+      "https://msgold.com.my/adminxsettings/__ajax2.php?fn=refg4&m=eval&f=&q=3825_1778727686_05a216ba187c04e146501316fdc220b3&seed=" +
+      Date.now(); // IMPORTANT: stable seed, not Math.random
+
+    const res = await axios.get(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://msgold.com.my/"
+      },
+      timeout: 10000
     });
 
-    const page = await browser.newPage();
-
-    const responsePromise = page.waitForResponse(
-      (res) =>
-        res.url().includes("__ajax2.php") &&
-        res.url().includes("fn=refg4"),
-      { timeout: 20000 }
-    );
-
-    await page.goto("https://msgold.com.my/", {
-      waitUntil: "domcontentloaded"
-    });
-
-    const response = await responsePromise;
-    const text = await response.text();
+    const text = res.data;
 
     const match = text.match(/updprc\('spn9','([^']+)'\)/);
 
+    if (!match) {
+      throw new Error("Pattern not found");
+    }
+
     cache = {
-      spn9: match?.[1] || null,
-      updated: Date.now(),
-      success: !!match,
+      spn9: match[1],
+      updated: new Date().toLocaleString("en-MY", {
+        timeZone: "Asia/Kuala_Lumpur"
+      }),
+      success: true,
       error: null
     };
 
     console.log("SUCCESS:", cache);
-    return cache;
-
   } catch (err) {
     console.log("ERROR:", err.message);
 
+    // ❗ DO NOT wipe good cache on failure
     cache = {
-      spn9: null,
-      updated: Date.now(),
+      ...cache,
       success: false,
       error: err.message
     };
-
-    return cache;
-
   } finally {
     isScraping = false;
-    if (browser) await browser.close();
   }
 }
 
-// --------------------
-// SMART CACHE LAYER
-// --------------------
-async function getData() {
-  const now = Date.now();
+/**
+ * =========================
+ * API
+ * =========================
+ */
 
-  if (!cache.updated || now - cache.updated > CACHE_TTL) {
-    await scrape();
-  }
+// ALWAYS return cached value (NO scraping here)
+app.get("/gold", (req, res) => {
+  res.json(cache);
+});
 
-  return cache;
-}
+// manual refresh endpoint (optional)
+app.get("/refresh", async (req, res) => {
+  await scrape();
+  res.json(cache);
+});
 
-// --------------------
-// ROUTES
-// --------------------
 app.get("/", (req, res) => {
-  res.send("Gold Scraper Running (STABLE PLAYWRIGHT MODE)");
+  res.send("Gold Scraper Running (STABLE MODE)");
 });
 
-app.get("/gold", async (req, res) => {
-  const data = await getData();
-  res.json(data);
-});
+/**
+ * =========================
+ * BACKGROUND LOOP (SAFE)
+ * =========================
+ */
 
-// --------------------
-// START SERVER
-// --------------------
+// first run immediately
+scrape();
+
+// then loop safely every 30s (NOT 10s, too aggressive for Render)
+setInterval(() => {
+  scrape().catch(() => {});
+}, 30000);
+
+/**
+ * =========================
+ * SERVER START
+ * =========================
+ */
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("RUNNING ON PORT:", PORT);
 });
