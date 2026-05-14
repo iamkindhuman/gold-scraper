@@ -5,58 +5,54 @@ import axios from "axios";
 const app = express();
 app.use(cors());
 
-async function getAjaxUrl() {
-  const res = await axios.get("https://msgold.com.my/", {
-    headers: {
-      "User-Agent": "Mozilla/5.0"
-    }
-  });
+let cache = {
+  spn9: null,
+  updated: null,
+  success: false
+};
 
-  const html = res.data;
+// generate dynamic q similar to site pattern
+function generateQ() {
+  const part1 = 8050;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const hash = "01da9b4759d81a47cf8c4f00e5d38451"; // stable part observed
 
-  // extract FULL ajax url from script
-  const match = html.match(/__ajax2\.php\?fn=refg4[^"']+/);
-
-  if (!match) return null;
-
-  return "https://msgold.com.my/adminxsettings/" + match[0];
+  return `${part1}_${timestamp}_${hash}`;
 }
 
 async function scrape() {
   try {
-    console.log("FETCHING DYNAMIC AJAX...");
+    console.log("TRY FETCH AJAX...");
 
-    const ajaxUrl = await getAjaxUrl();
+    const q = generateQ();
 
-    if (!ajaxUrl) throw new Error("AJAX URL not found");
+    const url = `https://msgold.com.my/adminxsettings/__ajax2.php?fn=refg4&m=eval&f=&q=${q}&seed=${Math.random()}`;
 
-    const res = await axios.get(ajaxUrl, {
+    const res = await axios.get(url, {
       headers: {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://msgold.com.my/"
       }
     });
 
-    const html = res.data;
+    const text = res.data;
 
-    const spn9 = html.match(/updprc\('spn9','([^']+)'\)/);
+    const match = text.match(/updprc\('spn9','([^']+)'\)/);
 
-    const result = {
-      spn9: spn9?.[1] || null,
+    cache = {
+      spn9: match?.[1] || null,
       updated: new Date().toLocaleString("en-MY", {
         timeZone: "Asia/Kuala_Lumpur"
       }),
-      success: !!spn9
+      success: !!match
     };
 
-    console.log("RESULT:", result);
-
-    return result;
+    console.log("RESULT:", cache);
 
   } catch (err) {
     console.log("ERROR:", err.message);
 
-    return {
+    cache = {
       spn9: null,
       success: false,
       error: err.message
@@ -65,13 +61,15 @@ async function scrape() {
 }
 
 app.get("/gold", async (req, res) => {
-  const data = await scrape();
-  res.json(data);
+  await scrape();
+  res.json(cache);
 });
 
 app.get("/", (req, res) => {
-  res.send("Gold Scraper Running (AUTO AJAX DETECTION)");
+  res.send("Gold Scraper Running (DIRECT AJAX MODE)");
 });
+
+setInterval(scrape, 30000);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("RUNNING:", PORT));
