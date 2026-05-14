@@ -3,7 +3,6 @@ import cors from "cors";
 import { chromium } from "playwright";
 
 const app = express();
-
 app.use(cors());
 
 let cache = {
@@ -15,15 +14,12 @@ let cache = {
 };
 
 async function scrape() {
-
   let browser;
 
   try {
-
     console.log("SCRAPING START");
 
     browser = await chromium.launch({
-      executablePath: "/opt/render/.cache/ms-playwright/chromium-1223/chrome-linux/chrome",
       headless: true,
       args: [
         "--no-sandbox",
@@ -33,24 +29,21 @@ async function scrape() {
       ]
     });
 
-    const page = await browser.newPage({
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-    });
+    const page = await browser.newPage();
 
     await page.goto("https://msgold.com.my/", {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
       timeout: 60000
     });
 
-    await page.waitForTimeout(10000);
+    await page.waitForSelector("#spn9", { timeout: 30000 });
 
-    const buy = await page.locator("#spn9").textContent();
-    const sell = await page.locator("#spn10").textContent();
+    const buy = await page.$eval("#spn9", el => el.textContent.trim());
+    const sell = await page.$eval("#spn10", el => el.textContent.trim());
 
     cache = {
-      buy: buy?.trim(),
-      sell: sell?.trim(),
+      buy,
+      sell,
       updated: new Date().toLocaleString("en-MY", {
         timeZone: "Asia/Kuala_Lumpur"
       }),
@@ -63,7 +56,6 @@ async function scrape() {
     await browser.close();
 
   } catch (err) {
-
     console.log("ERROR:", err.message);
 
     cache = {
@@ -74,30 +66,15 @@ async function scrape() {
       error: err.message
     };
 
-    if (browser) {
-      await browser.close();
-    }
-
+    if (browser) await browser.close();
   }
-
 }
 
-// first run
 await scrape();
-
-// every 1 minute
 setInterval(scrape, 60000);
 
-app.get("/", (req, res) => {
-  res.send("Gold Scraper Running");
-});
-
-app.get("/gold", (req, res) => {
-  res.json(cache);
-});
+app.get("/", (req, res) => res.send("Gold Scraper Running"));
+app.get("/gold", (req, res) => res.json(cache));
 
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log("SERVER RUNNING:", PORT);
-});
+app.listen(PORT, () => console.log("SERVER RUNNING:", PORT));
