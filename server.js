@@ -6,42 +6,16 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-/* =========================
-   ERROR HANDLING
-========================= */
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT:", err);
-});
-
-process.on("unhandledRejection", (err) => {
-  console.error("REJECTION:", err);
-});
-
-/* =========================
-   HOME
-========================= */
+// Health check
 app.get("/", (req, res) => {
   res.json({
     status: "alive",
     service: "gold-scraper",
+    time: new Date().toISOString(),
   });
 });
 
-/* =========================
-   GOLD ROUTE (FIX FOR YOU)
-========================= */
-app.get("/gold", (req, res) => {
-  res.json({
-    message: "Use /scrape to get data",
-    endpoints: {
-      scrape: "/scrape"
-    }
-  });
-});
-
-/* =========================
-   SCRAPER
-========================= */
+// MAIN SCRAPER
 app.get("/scrape", async (req, res) => {
   let browser;
 
@@ -50,40 +24,50 @@ app.get("/scrape", async (req, res) => {
 
     browser = await chromium.launch({
       headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-      ],
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
 
     const page = await browser.newPage();
 
+    let ajaxResults = [];
+
+    // Capture ALL AJAX responses
+    page.on("response", async (response) => {
+      const url = response.url();
+
+      if (url.includes("__ajax2.php")) {
+        try {
+          const text = await response.text();
+
+          ajaxResults.push({
+            url,
+            data: text,
+            time: new Date().toISOString(),
+          });
+        } catch (e) {}
+      }
+    });
+
     await page.goto("https://msgold.com.my/", {
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle",
       timeout: 60000,
     });
 
-    await page.waitForTimeout(3000);
-
-    const data = await page.evaluate(() => {
-      const text = document.body.innerText || "";
-
-      return {
-        title: document.title,
-        preview: text.slice(0, 1500),
-      };
-    });
+    // wait for AJAX refresh cycles (important!)
+    await page.waitForTimeout(15000);
 
     await browser.close();
 
     return res.json({
       success: true,
-      updated: new Date().toISOString(),
-      data,
+      count: ajaxResults.length,
+      result: ajaxResults,
     });
+
   } catch (err) {
     if (browser) await browser.close();
+
+    console.error(err);
 
     return res.status(500).json({
       success: false,
@@ -92,9 +76,6 @@ app.get("/scrape", async (req, res) => {
   }
 });
 
-/* =========================
-   START SERVER
-========================= */
 app.listen(PORT, "0.0.0.0", () => {
   console.log("RUNNING ON PORT:", PORT);
 });
