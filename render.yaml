@@ -3,14 +3,14 @@ services:
     name: gold-scraper
     env: node
     plan: free
+    region: singapore
 
     buildCommand: npm install
     startCommand: node server.js
 
     envVars:
       - key: NODE_VERSION
-        value: 20
-      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
-        value: "1"
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: "/opt/render/.cache/ms-playwright"
+        value: 18
+
+      - key: NODE_ENV
+        value: production
