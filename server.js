@@ -5,6 +5,7 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// Enable CORS
 app.use(cors({
     origin: '*',
     methods: ['GET']
@@ -13,231 +14,126 @@ app.use(cors({
 // Cache management
 let cachedAjaxUrl = null;
 let lastUrlFetch = 0;
-const URL_CACHE_DURATION = 60000; // 1 minute
+const URL_CACHE_DURATION = 3000; // 3 seconds cache (matches the 4-second refresh on site)
 let cachedGoldData = null;
 let lastGoldFetch = 0;
-const GOLD_CACHE_DURATION = 3000; // 3 seconds
+const GOLD_CACHE_DURATION = 2000; // 2 seconds
 
-// Multiple known working URL patterns
-const KNOWN_PATTERNS = [
-    'adminxsettings/__ajax2.php?fn=refg4&m=eval&f=&q=',
-    '__ajax2.php?fn=refg4&m=eval&f=&q=',
-    'ajax/gold_price.php',
-    'api/gold',
-    'live/gold-price'
-];
+// We need to get the correct prefix from the page
+let urlPrefix = '794'; // Default fallback
 
-async function extractAjaxUrl() {
+// Function to extract the AJAX URL parameters from the page
+async function extractAjaxParams() {
     try {
-        console.log('Attempting to fetch main page...');
+        console.log('Extracting AJAX parameters...');
         
         const response = await axios.get('https://msgold.com.my/', {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Cache-Control': 'max-age=0'
+                'Cache-Control': 'no-cache'
             },
-            timeout: 30000,
-            maxRedirects: 5,
-            validateStatus: function (status) {
-                return status >= 200 && status < 400;
-            }
+            timeout: 15000
         });
         
         const html = response.data;
-        console.log('Page fetched successfully, size:', html.length, 'bytes');
         
-        // Save HTML for debugging (first 2000 chars)
-        const debugHtml = html.substring(0, 2000);
-        console.log('HTML preview:', debugHtml);
+        // Look for the refg() function to extract parameters
+        const refgMatch = html.match(/ajax\("refg4","(\d+)_"[+]s\+"_([a-f0-9]+)"\)/);
         
-        let ajaxUrl = null;
-        
-        // Method 1: Look for __ajax2.php with full path
-        const patterns = [
-            /adminxsettings\/__ajax2\.php\?[^"'\s<>]+/g,
-            /__ajax2\.php\?[^"'\s<>]+/g,
-            /["']([^"']*__ajax2\.php[^"']*)["']/g,
-            /ajaxurl\s*=\s*["']([^"']+)["']/g,
-            /url:\s*["']([^"']*ajax[^"']*)["']/g
-        ];
-        
-        for (let pattern of patterns) {
-            const matches = html.match(pattern);
-            if (matches && matches.length > 0) {
-                console.log(`Pattern matched: ${pattern}`);
-                console.log('Matches found:', matches);
-                
-                // Get the last match (most likely current)
-                let url = matches[matches.length - 1];
-                // Clean up quotes
-                url = url.replace(/["']/g, '');
-                // Remove any prefix like 'url:' or 'ajaxurl='
-                url = url.replace(/^(?:url|ajaxurl):\s*['"]?/, '');
-                
-                if (url.includes('__ajax2.php') || url.includes('ajax')) {
-                    // Ensure it has the adminxsettings prefix if needed
-                    if (!url.startsWith('adminxsettings/') && !url.startsWith('/')) {
-                        url = 'adminxsettings/' + url;
-                    }
-                    ajaxUrl = url;
-                    console.log('Found AJAX URL:', ajaxUrl);
-                    break;
-                }
-            }
-        }
-        
-        // Method 2: Look for eval or function calls that construct the URL
-        if (!ajaxUrl) {
-            const evalPatterns = [
-                /fn=refg4[^"'\s<>]*/g,
-                /refg4[^"'\s<>]*/g,
-                /__ajax2[^"'\s<>]*/g
-            ];
+        if (refgMatch) {
+            const prefix = refgMatch[1]; // e.g., "3581" or "794"
+            const hash = refgMatch[2];   // e.g., "c7345ad4580290c2971b1a5b43b0db0a"
             
-            for (let pattern of evalPatterns) {
-                const matches = html.match(pattern);
-                if (matches) {
-                    console.log('Eval pattern matched:', matches);
-                }
-            }
+            console.log('Found AJAX parameters - Prefix:', prefix, 'Hash:', hash);
+            
+            return { prefix, hash };
         }
         
-        // Method 3: Search in script tags specifically
-        if (!ajaxUrl) {
-            const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
-            let scriptMatch;
-            while ((scriptMatch = scriptRegex.exec(html)) !== null) {
-                const scriptContent = scriptMatch[1];
-                if (scriptContent.includes('ajax') || scriptContent.includes('refg4')) {
-                    console.log('Found relevant script:', scriptContent.substring(0, 500));
-                    
-                    const urlMatch = scriptContent.match(/["']([^"']*ajax[^"']*)["']/);
-                    if (urlMatch) {
-                        ajaxUrl = urlMatch[1];
-                        break;
-                    }
-                }
-            }
+        // Alternative pattern
+        const altMatch = html.match(/refg4","(\d+)_"[+]s\+"_([^"]+)"/);
+        if (altMatch) {
+            console.log('Found AJAX parameters (alt) - Prefix:', altMatch[1], 'Hash:', altMatch[2]);
+            return { prefix: altMatch[1], hash: altMatch[2] };
         }
         
-        return ajaxUrl;
+        console.log('Could not extract parameters, using defaults');
+        return null;
         
     } catch (error) {
-        console.error('Error fetching main page:', error.message);
-        if (error.response) {
-            console.error('Response status:', error.response.status);
-            console.error('Response headers:', error.response.headers);
-        }
+        console.error('Error extracting AJAX params:', error.message);
         return null;
     }
 }
 
-// Alternative: Try to construct the URL with current timestamp
-function generatePossibleUrl() {
+// Function to generate a current AJAX URL
+function generateAjaxUrl(prefix, hash) {
     const timestamp = Math.floor(Date.now() / 1000);
-    const random = Math.random().toString(36).substring(7);
     const seed = Math.random();
+    const q = `${prefix}_${timestamp}_${hash}`;
     
-    // Based on your example: 794_1778739259_c7345ad4580290c2971b1a5b43b0db0a
-    return `adminxsettings/__ajax2.php?fn=refg4&m=eval&f=&q=794_${timestamp}_${random}&seed=${seed}`;
+    return `adminxsettings/__ajax2.php?fn=refg4&m=eval&f=&q=${q}&seed=${seed}`;
 }
 
-// Try to fetch gold data from multiple possible URLs
-async function tryMultipleUrls() {
-    const urlsToTry = [];
-    
-    // Add cached URL if exists
-    if (cachedAjaxUrl) {
-        urlsToTry.push(cachedAjaxUrl);
-    }
-    
-    // Add generated URL
-    urlsToTry.push(generatePossibleUrl());
-    
-    // Add common patterns
-    for (let pattern of KNOWN_PATTERNS) {
-        const timestamp = Math.floor(Date.now() / 1000);
-        const random = Math.random().toString(36).substring(7);
-        urlsToTry.push(`${pattern}${timestamp}_${random}&seed=${Math.random()}`);
-    }
-    
-    for (let url of urlsToTry) {
-        try {
-            console.log('Trying URL:', url);
-            const fullUrl = `https://msgold.com.my/${url}`;
-            
-            const response = await axios.get(fullUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': '*/*',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Referer': 'https://msgold.com.my/',
-                    'Cache-Control': 'no-cache'
-                },
-                timeout: 10000,
-                validateStatus: function (status) {
-                    return status === 200; // Only accept 200
-                }
-            });
-            
-            if (response.data && response.data !== '') {
-                console.log('Success with URL:', url);
-                console.log('Response data type:', typeof response.data);
-                console.log('Response preview:', JSON.stringify(response.data).substring(0, 200));
-                
-                // Cache the working URL
-                cachedAjaxUrl = url;
-                lastUrlFetch = Date.now();
-                
-                return response.data;
+// Function to fetch gold data
+async function fetchGoldData(url) {
+    try {
+        const fullUrl = `https://msgold.com.my/${url}`;
+        console.log('Fetching:', fullUrl);
+        
+        const response = await axios.get(fullUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Referer': 'https://msgold.com.my/',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
+            },
+            timeout: 10000,
+            validateStatus: function (status) {
+                return status === 200;
             }
-        } catch (error) {
-            console.log(`Failed with URL ${url}:`, error.message);
+        });
+        
+        const data = response.data;
+        console.log('Response type:', typeof data);
+        console.log('Response preview:', JSON.stringify(data).substring(0, 300));
+        
+        // Check if it's a redirect
+        if (typeof data === 'string' && data.includes('window.location')) {
+            console.log('Got redirect response, URL might be expired');
+            return null;
         }
+        
+        return data;
+        
+    } catch (error) {
+        console.error('Fetch error:', error.message);
+        return null;
     }
-    
-    return null;
 }
 
+// Function to parse gold data from eval response
 function parseGoldData(rawData) {
-    console.log('Parsing data type:', typeof rawData);
+    console.log('Parsing data...');
     
     let spn9 = null;
     
-    // If it's an object
-    if (typeof rawData === 'object' && rawData !== null) {
-        // Check common property names
-        for (let key of ['spn9', 'price', 'value', 'gold_price', 'harga', 'kadar']) {
-            if (rawData[key] !== undefined) {
-                spn9 = parseFloat(rawData[key]);
-                if (!isNaN(spn9) && spn9 > 100) {
-                    console.log(`Found spn9 in object.${key}:`, spn9);
-                    return spn9;
-                }
-            }
-        }
+    // If it's an array (common for eval responses)
+    if (Array.isArray(rawData)) {
+        console.log('Data is array with', rawData.length, 'items');
         
-        // Search through all properties
-        for (let key in rawData) {
-            if (typeof rawData[key] === 'number' && rawData[key] > 100) {
-                spn9 = rawData[key];
-                console.log(`Found number in object.${key}:`, spn9);
-                break;
-            }
-            if (typeof rawData[key] === 'string') {
-                const num = parseFloat(rawData[key]);
-                if (!isNaN(num) && num > 100) {
-                    spn9 = num;
-                    console.log(`Found string-number in object.${key}:`, spn9);
+        // Look for SPAN elements with gold prices
+        for (let item of rawData) {
+            if (typeof item === 'string') {
+                // Look for span updates like: gebi('spn9').innerHTML='XXX.XX'
+                const spn9Match = item.match(/spn9[^=]*=\s*['"]?([\d.]+)/);
+                if (spn9Match) {
+                    spn9 = parseFloat(spn9Match[1]);
+                    console.log('Found spn9 in array:', spn9);
                     break;
                 }
             }
@@ -246,32 +142,73 @@ function parseGoldData(rawData) {
     
     // If it's a string
     if (typeof rawData === 'string') {
-        // Try to parse as JSON
+        console.log('Data is string, length:', rawData.length);
+        
+        // Try to parse as JSON first
         try {
             const parsed = JSON.parse(rawData);
-            return parseGoldData(parsed);
+            if (Array.isArray(parsed)) {
+                return parseGoldData(parsed);
+            }
+            if (typeof parsed === 'object') {
+                return parseGoldData(parsed);
+            }
         } catch (e) {
-            // Not JSON, extract numbers
+            // Not JSON, continue with string parsing
         }
         
-        // Look for numbers that could be gold prices (usually between 200-500)
-        const numbers = rawData.match(/\d+\.?\d*/g);
-        if (numbers) {
-            console.log('Found numbers in string:', numbers);
-            for (let num of numbers) {
-                const val = parseFloat(num);
-                if (val > 200 && val < 600) {
-                    spn9 = val;
-                    console.log('Found gold price in string:', spn9);
-                    break;
+        // Look for spn9 value in eval code
+        const spn9Match = rawData.match(/spn9[^=]*=\s*['"]?([\d.]+)/);
+        if (spn9Match) {
+            spn9 = parseFloat(spn9Match[1]);
+            console.log('Found spn9 in string:', spn9);
+        }
+        
+        // Look for any spn values as backup
+        if (!spn9) {
+            const spnMatch = rawData.match(/spn(\d+)[^=]*=\s*['"]?([\d.]+)/g);
+            if (spnMatch) {
+                console.log('Found SPN values:', spnMatch);
+                // Try to get spn9 specifically
+                for (let match of spnMatch) {
+                    if (match.includes('spn9')) {
+                        const numMatch = match.match(/([\d.]+)/);
+                        if (numMatch) {
+                            spn9 = parseFloat(numMatch[1]);
+                            break;
+                        }
+                    }
                 }
             }
-            // If no price in range, take the largest number
-            if (!spn9 && numbers.length > 0) {
-                const nums = numbers.map(n => parseFloat(n)).filter(n => n > 100);
-                if (nums.length > 0) {
-                    spn9 = Math.max(...nums);
-                    console.log('Taking largest number as gold price:', spn9);
+        }
+        
+        // Look for document.getElementById('spn9') patterns
+        if (!spn9) {
+            const docMatch = rawData.match(/getElementById\(['"]spn9['"]\)[^=]*=\s*['"]?([\d.]+)/);
+            if (docMatch) {
+                spn9 = parseFloat(docMatch[1]);
+                console.log('Found spn9 via getElementById:', spn9);
+            }
+        }
+    }
+    
+    // If it's an object
+    if (typeof rawData === 'object' && rawData !== null && !Array.isArray(rawData)) {
+        console.log('Data is object with keys:', Object.keys(rawData));
+        
+        // Check for spn9 directly
+        if (rawData.spn9 !== undefined) {
+            spn9 = parseFloat(rawData.spn9);
+        }
+        
+        // Check for any property containing gold price
+        if (!spn9) {
+            for (let key in rawData) {
+                const val = parseFloat(rawData[key]);
+                if (!isNaN(val) && val > 200 && val < 600) {
+                    spn9 = val;
+                    console.log('Found gold price in object.' + key + ':', spn9);
+                    break;
                 }
             }
         }
@@ -291,71 +228,52 @@ app.get('/gold', async (req, res) => {
             return res.json(cachedGoldData);
         }
         
-        // Try to get AJAX URL first
-        let rawData = null;
-        
-        if (cachedAjaxUrl && (now - lastUrlFetch) < URL_CACHE_DURATION) {
-            // Use cached URL
-            try {
-                const fullUrl = `https://msgold.com.my/${cachedAjaxUrl}`;
-                console.log('Using cached URL:', fullUrl);
-                const response = await axios.get(fullUrl, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'Referer': 'https://msgold.com.my/'
-                    },
-                    timeout: 10000
-                });
-                rawData = response.data;
-            } catch (error) {
-                console.log('Cached URL failed, will try alternatives');
-                cachedAjaxUrl = null; // Invalidate cache
+        // Get AJAX parameters if we don't have them or they're old
+        let params = null;
+        if (!cachedAjaxUrl || (now - lastUrlFetch) > URL_CACHE_DURATION) {
+            const extractedParams = await extractAjaxParams();
+            if (extractedParams) {
+                params = extractedParams;
+                urlPrefix = params.prefix;
+                cachedAjaxUrl = generateAjaxUrl(params.prefix, params.hash);
+                lastUrlFetch = now;
+                console.log('Generated new AJAX URL:', cachedAjaxUrl);
             }
         }
         
-        // If no data yet, try to extract new URL
-        if (!rawData) {
-            const newUrl = await extractAjaxUrl();
-            if (newUrl) {
-                cachedAjaxUrl = newUrl;
-                lastUrlFetch = Date.now();
-                console.log('New AJAX URL:', newUrl);
-                
-                try {
-                    const fullUrl = `https://msgold.com.my/${newUrl}`;
-                    const response = await axios.get(fullUrl, {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0',
-                            'X-Requested-With': 'XMLHttpRequest',
-                            'Referer': 'https://msgold.com.my/'
-                        },
-                        timeout: 10000
-                    });
-                    rawData = response.data;
-                } catch (error) {
-                    console.log('New URL failed:', error.message);
-                }
-            }
+        // If we still don't have a URL, generate one with defaults
+        if (!cachedAjaxUrl) {
+            // Use the hash we know from debug
+            const hash = 'c7345ad4580290c2971b1a5b43b0db0a';
+            cachedAjaxUrl = generateAjaxUrl(urlPrefix, hash);
+            lastUrlFetch = now;
+            console.log('Using fallback AJAX URL:', cachedAjaxUrl);
         }
         
-        // If still no data, try multiple URLs
+        // Fetch gold data
+        let rawData = await fetchGoldData(cachedAjaxUrl);
+        
+        // If first attempt fails, try with fresh URL
         if (!rawData) {
-            console.log('Trying multiple URLs...');
-            rawData = await tryMultipleUrls();
+            console.log('First attempt failed, trying with fresh URL...');
+            const extractedParams = await extractAjaxParams();
+            if (extractedParams) {
+                cachedAjaxUrl = generateAjaxUrl(extractedParams.prefix, extractedParams.hash);
+                lastUrlFetch = now;
+                console.log('Retrying with new URL:', cachedAjaxUrl);
+                rawData = await fetchGoldData(cachedAjaxUrl);
+            }
         }
         
         if (!rawData) {
             return res.json({
                 success: false,
-                error: 'Could not fetch gold data from any source',
-                debug: {
-                    cached_url: cachedAjaxUrl,
-                    last_url_fetch: lastUrlFetch ? new Date(lastUrlFetch).toISOString() : null
-                }
+                error: 'Could not fetch gold data from source',
+                debug_url: cachedAjaxUrl
             });
         }
         
+        // Parse the data
         const spn9 = parseGoldData(rawData);
         
         if (!spn9) {
@@ -370,13 +288,14 @@ app.get('/gold', async (req, res) => {
             success: true,
             spn9: spn9,
             updated: new Date().toISOString(),
-            timestamp: now
+            timestamp: now,
+            source_url: cachedAjaxUrl
         };
         
         cachedGoldData = responseData;
         lastGoldFetch = now;
         
-        console.log('Success! Gold price:', spn9);
+        console.log('Success! Gold price (spn9):', spn9);
         res.json(responseData);
         
     } catch (error) {
@@ -388,40 +307,60 @@ app.get('/gold', async (req, res) => {
     }
 });
 
-// Debug endpoint to see what's happening
+// Debug endpoint
 app.get('/debug', async (req, res) => {
     try {
-        console.log('Debug: Fetching main page...');
         const response = await axios.get('https://msgold.com.my/', {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             },
-            timeout: 30000
+            timeout: 15000
         });
         
         const html = response.data;
         
-        // Search for various patterns
-        const ajaxPatterns = html.match(/ajax[^"'\s<>]{0,50}/gi) || [];
-        const scriptContent = html.match(/<script[^>]*>[\s\S]*?<\/script>/gi) || [];
+        // Extract the exact AJAX call pattern
+        const refgMatch = html.match(/ajax\("refg4","(\d+)_"[+]s\+"_([^"]+)"\)/);
         
-        // Find scripts containing gold/price/ajax
-        const relevantScripts = scriptContent.filter(s => 
-            s.toLowerCase().includes('gold') || 
-            s.toLowerCase().includes('price') || 
-            s.toLowerCase().includes('ajax') ||
-            s.toLowerCase().includes('refg4')
-        );
+        // Generate a test URL
+        let testUrl = null;
+        if (refgMatch) {
+            const timestamp = Math.floor(Date.now() / 1000);
+            const prefix = refgMatch[1];
+            const hash = refgMatch[2];
+            testUrl = `adminxsettings/__ajax2.php?fn=refg4&m=eval&f=&q=${prefix}_${timestamp}_${hash}&seed=${Math.random()}`;
+        }
+        
+        // Try to fetch with test URL
+        let testResponse = null;
+        if (testUrl) {
+            try {
+                const testResult = await axios.get(`https://msgold.com.my/${testUrl}`, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Referer': 'https://msgold.com.my/'
+                    },
+                    timeout: 10000
+                });
+                testResponse = {
+                    status: testResult.status,
+                    data_type: typeof testResult.data,
+                    data_preview: JSON.stringify(testResult.data).substring(0, 500)
+                };
+            } catch (e) {
+                testResponse = { error: e.message };
+            }
+        }
         
         res.json({
             success: true,
-            page_size: html.length,
-            ajax_references: ajaxPatterns.slice(0, 20),
-            relevant_scripts_count: relevantScripts.length,
-            script_preview: relevantScripts.slice(0, 3).map(s => s.substring(0, 500)),
-            html_preview: html.substring(0, 2000),
+            extracted_params: refgMatch ? { prefix: refgMatch[1], hash: refgMatch[2] } : null,
+            test_url: testUrl,
+            test_response: testResponse,
             cached_ajax_url: cachedAjaxUrl
         });
+        
     } catch (error) {
         res.json({
             success: false,
@@ -435,27 +374,26 @@ app.get('/', (req, res) => {
     res.json({
         status: 'online',
         service: 'Gold Price Scraper',
-        version: '1.0.0',
+        version: '1.1.0',
         uptime: process.uptime(),
         cached_url: cachedAjaxUrl || 'No',
+        url_prefix: urlPrefix,
         last_url_fetch: lastUrlFetch ? new Date(lastUrlFetch).toISOString() : 'Never',
-        last_successful_fetch: lastGoldFetch ? new Date(lastGoldFetch).toISOString() : 'Never'
+        last_gold_fetch: lastGoldFetch ? new Date(lastGoldFetch).toISOString() : 'Never'
     });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log('Attempting initial URL extraction...');
+    console.log(`Gold Price Server v1.1.0 running on port ${PORT}`);
     
-    // Initial attempt with delay to ensure network is ready
+    // Initial parameter extraction
     setTimeout(async () => {
-        const url = await extractAjaxUrl();
-        if (url) {
-            cachedAjaxUrl = url;
+        const params = await extractAjaxParams();
+        if (params) {
+            urlPrefix = params.prefix;
+            cachedAjaxUrl = generateAjaxUrl(params.prefix, params.hash);
             lastUrlFetch = Date.now();
-            console.log('Initial URL cached:', url);
-        } else {
-            console.log('Initial URL extraction failed, will retry on first request');
+            console.log('Initial URL cached:', cachedAjaxUrl);
         }
-    }, 5000);
+    }, 3000);
 });
