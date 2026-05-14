@@ -1,50 +1,52 @@
 const express = require("express");
 const axios = require("axios");
-const cheerio = require("cheerio");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-let latestData = null;
+let cache = null;
 
 /**
- * STEP 1: GET PAGE + EXTRACT AJAX "q" VALUE
+ * GET dynamic q= value from homepage
  */
-async function getAjaxQuery() {
+async function getQ() {
   try {
-    const res = await axios.get("https://msgold.com.my/");
+    const res = await axios.get("https://msgold.com.my/", {
+      headers: {
+        "User-Agent": "Mozilla/5.0"
+      }
+    });
+
     const html = res.data;
 
-    // Try to find q= value in scripts
+    // extract q=xxxxxxxx pattern
     const match = html.match(/q=([a-zA-Z0-9_]+)/);
 
-    if (!match) {
-      throw new Error("Cannot find q parameter in page");
-    }
+    if (!match) return null;
 
     return match[1];
   } catch (err) {
-    console.error("Failed to extract q:", err.message);
+    console.log("Q ERROR:", err.message);
     return null;
   }
 }
 
 /**
- * STEP 2: CALL AJAX ENDPOINT
+ * CALL AJAX API
  */
-async function fetchGoldData() {
+async function fetchGold() {
   try {
-    const q = await getAjaxQuery();
+    const q = await getQ();
     if (!q) return;
 
-    const url = `https://msgold.com.my/adminxsettings/__ajax2.php`;
+    const url = "https://msgold.com.my/adminxsettings/__ajax2.php";
 
     const res = await axios.get(url, {
       params: {
         fn: "refg4",
         m: "eval",
         f: "",
-        q: q,
+        q,
         seed: Math.random()
       },
       headers: {
@@ -53,29 +55,39 @@ async function fetchGoldData() {
       }
     });
 
-    latestData = {
+    cache = {
       q,
-      raw: res.data,
+      data: res.data,
       updated: new Date().toISOString()
     };
 
-    console.log("UPDATED:", latestData.updated);
+    console.log("UPDATED:", cache.updated);
   } catch (err) {
-    console.error("AJAX ERROR:", err.message);
+    console.log("AJAX ERROR:", err.message);
   }
 }
 
 /**
- * AUTO RUN EVERY 10 SECONDS
+ * RUN EVERY 10 SECONDS
  */
-setInterval(fetchGoldData, 10000);
-fetchGoldData();
+setInterval(fetchGold, 10000);
+fetchGold();
 
 /**
- * API ENDPOINT
+ * HEALTH CHECK
+ */
+app.get("/", (req, res) => {
+  res.json({
+    status: "alive",
+    service: "gold-scraper"
+  });
+});
+
+/**
+ * OUTPUT API
  */
 app.get("/gold", (req, res) => {
-  if (!latestData) {
+  if (!cache) {
     return res.status(503).json({
       success: false,
       message: "No data yet"
@@ -84,10 +96,13 @@ app.get("/gold", (req, res) => {
 
   res.json({
     success: true,
-    data: latestData
+    result: cache
   });
 });
 
+/**
+ * START SERVER
+ */
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("Server running on port", PORT);
+  console.log("RUNNING ON PORT:", PORT);
 });
