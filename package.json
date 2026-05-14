@@ -1,14 +1,18 @@
 {
-  "name": "gold-scraper",
+  "name": "gold-price-scraper",
   "version": "1.0.0",
+  "description": "Gold price scraper for msgold.com.my",
   "main": "server.js",
-  "type": "commonjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "dependencies": {
+    "express": "^4.18.2",
     "axios": "^1.6.0",
-    "cheerio": "^1.0.0-rc.12",
-    "express": "^4.18.2"
+    "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
