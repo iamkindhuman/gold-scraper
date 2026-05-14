@@ -11,77 +11,64 @@ let cache = {
   success: false
 };
 
-let browser, page;
+async function scrape() {
+  let browser;
 
-async function initBrowser() {
-  if (browser) return;
-
-  browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
-  });
-
-  page = await browser.newPage();
-
-  // 🔥 INTERCEPT ALL AJAX RESPONSES
-  page.on("response", async (response) => {
-    const url = response.url();
-
-    if (url.includes("__ajax2.php") && url.includes("fn=refg4")) {
-      try {
-        const text = await response.text();
-
-        const match = text.match(/updprc\('spn9','([^']+)'\)/);
-
-        if (match) {
-          cache = {
-            spn9: match[1],
-            updated: new Date().toLocaleString("en-MY", {
-              timeZone: "Asia/Kuala_Lumpur"
-            }),
-            success: true
-          };
-
-          console.log("UPDATED:", cache);
-        }
-      } catch (e) {}
-    }
-  });
-
-  // load once
-  await page.goto("https://msgold.com.my/", {
-    waitUntil: "networkidle"
-  });
-}
-
-async function refreshData() {
   try {
-    await initBrowser();
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
 
-    // 🔥 trigger page JS again (forces new AJAX calls)
-    await page.reload({ waitUntil: "networkidle" });
+    const page = await browser.newPage();
+
+    await page.goto("https://msgold.com.my/", {
+      waitUntil: "networkidle"
+    });
+
+    // 🔥 WAIT UNTIL JS FINISHES POPULATING VALUE
+    await page.waitForFunction(() => {
+      const el = document.querySelector("#spn9");
+      return el && el.innerText.trim() !== "";
+    }, { timeout: 20000 });
+
+    const spn9 = await page.$eval("#spn9", el => el.innerText.trim());
+
+    cache = {
+      spn9,
+      updated: new Date().toLocaleString("en-MY", {
+        timeZone: "Asia/Kuala_Lumpur"
+      }),
+      success: true
+    };
+
+    console.log("OK:", cache);
 
   } catch (err) {
-    console.log("REFRESH ERROR:", err.message);
+    console.log("ERROR:", err.message);
+
+    cache = {
+      spn9: null,
+      success: false,
+      error: err.message
+    };
+
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
-// API
-app.get("/gold", (req, res) => {
+app.get("/gold", async (req, res) => {
+  await scrape();
   res.json(cache);
 });
 
-app.get("/refresh", async (req, res) => {
-  await refreshData();
-  res.json({ ok: true });
-});
-
 app.get("/", (req, res) => {
-  res.send("Gold Scraper Running (STABLE MODE)");
+  res.send("Gold Scraper STABLE MODE");
 });
 
-// refresh loop (safe)
-setInterval(refreshData, 15000);
+setInterval(() => {
+  scrape().catch(() => {});
+}, 15000);
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("RUNNING:", PORT));
+app.listen(3000, () => console.log("RUNNING"));
