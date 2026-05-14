@@ -11,70 +11,77 @@ let cache = {
   success: false
 };
 
-async function scrape() {
-  let browser;
+let browser, page;
 
+async function initBrowser() {
+  if (browser) return;
+
+  browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+  });
+
+  page = await browser.newPage();
+
+  // 🔥 INTERCEPT ALL AJAX RESPONSES
+  page.on("response", async (response) => {
+    const url = response.url();
+
+    if (url.includes("__ajax2.php") && url.includes("fn=refg4")) {
+      try {
+        const text = await response.text();
+
+        const match = text.match(/updprc\('spn9','([^']+)'\)/);
+
+        if (match) {
+          cache = {
+            spn9: match[1],
+            updated: new Date().toLocaleString("en-MY", {
+              timeZone: "Asia/Kuala_Lumpur"
+            }),
+            success: true
+          };
+
+          console.log("UPDATED:", cache);
+        }
+      } catch (e) {}
+    }
+  });
+
+  // load once
+  await page.goto("https://msgold.com.my/", {
+    waitUntil: "networkidle"
+  });
+}
+
+async function refreshData() {
   try {
-    console.log("SCRAPE START (ULTRA STABLE MODE)");
+    await initBrowser();
 
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"]
-    });
-
-    const page = await browser.newPage();
-
-    // wait specifically for AJAX response
-    const [response] = await Promise.all([
-      page.waitForResponse(res =>
-        res.url().includes("__ajax2.php") &&
-        res.url().includes("fn=refg4")
-      , { timeout: 20000 }),
-
-      page.goto("https://msgold.com.my/", {
-        waitUntil: "domcontentloaded"
-      })
-    ]);
-
-    const text = await response.text();
-
-    const match = text.match(/updprc\('spn9','([^']+)'\)/);
-
-    cache = {
-      spn9: match?.[1] || null,
-      updated: new Date().toLocaleString("en-MY", {
-        timeZone: "Asia/Kuala_Lumpur"
-      }),
-      success: !!match
-    };
-
-    console.log("SUCCESS:", cache);
+    // 🔥 trigger page JS again (forces new AJAX calls)
+    await page.reload({ waitUntil: "networkidle" });
 
   } catch (err) {
-    console.log("ERROR:", err.message);
-
-    cache = {
-      spn9: null,
-      success: false,
-      error: err.message
-    };
-  } finally {
-    if (browser) await browser.close();
+    console.log("REFRESH ERROR:", err.message);
   }
 }
 
 // API
-app.get("/gold", async (req, res) => {
-  await scrape();
+app.get("/gold", (req, res) => {
   res.json(cache);
 });
 
-app.get("/", (req, res) => {
-  res.send("Gold Scraper Running (ROBUST MODE)");
+app.get("/refresh", async (req, res) => {
+  await refreshData();
+  res.json({ ok: true });
 });
 
-// auto refresh
-setInterval(scrape, 15000);
+app.get("/", (req, res) => {
+  res.send("Gold Scraper Running (STABLE MODE)");
+});
+
+// refresh loop (safe)
+setInterval(refreshData, 15000);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("RUNNING:", PORT));
