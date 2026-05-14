@@ -10,7 +10,8 @@ let cache = {
   buy: null,
   sell: null,
   updated: null,
-  success: false
+  success: false,
+  error: null
 };
 
 async function scrape() {
@@ -18,6 +19,8 @@ async function scrape() {
   let browser;
 
   try {
+
+    console.log("Starting scrape...");
 
     browser = await chromium.launch({
       headless: true,
@@ -29,45 +32,53 @@ async function scrape() {
       ]
     });
 
-    const page = await browser.newPage();
+    const page = await browser.newPage({
+
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+
+    });
 
     await page.goto("https://msgold.com.my/", {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
       timeout: 60000
     });
 
-    await page.waitForSelector("#spn9", {
-      timeout: 30000
-    });
+    console.log("Website loaded");
 
-    const result = await page.evaluate(() => {
+    await page.waitForTimeout(10000);
 
-      return {
-        buy: document.querySelector("#spn9")?.innerText?.trim(),
-        sell: document.querySelector("#spn10")?.innerText?.trim()
-      };
+    const html = await page.content();
 
-    });
+    console.log("HTML length:", html.length);
+
+    const buy = await page.locator("#spn9").textContent();
+    const sell = await page.locator("#spn10").textContent();
+
+    console.log("BUY:", buy);
+    console.log("SELL:", sell);
 
     cache = {
-      buy: result.buy,
-      sell: result.sell,
+      buy: buy?.trim(),
+      sell: sell?.trim(),
       updated: new Date().toLocaleString("en-MY", {
         timeZone: "Asia/Kuala_Lumpur"
       }),
-      success: true
+      success: true,
+      error: null
     };
-
-    console.log(cache);
 
     await browser.close();
 
+    console.log("SUCCESS");
+
   } catch (err) {
 
-    console.log("SCRAPE ERROR:");
+    console.log("FULL ERROR:");
     console.log(err);
 
     cache.success = false;
+    cache.error = err.message;
 
     if (browser) {
       await browser.close();
@@ -77,10 +88,8 @@ async function scrape() {
 
 }
 
-// initial scrape
-scrape();
+await scrape();
 
-// scrape every 60 sec
 setInterval(scrape, 60000);
 
 app.get("/", (req, res) => {
