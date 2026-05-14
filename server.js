@@ -1,115 +1,81 @@
-import express from "express";
-import cors from "cors";
-import axios from "axios";
+const express = require("express");
+const { chromium } = require("playwright");
 
 const app = express();
-app.use(cors());
+app.use(express.json());
 
-let cache = {
-  spn9: null,
-  updated: null,
-  success: false,
-  error: null
-};
+const PORT = process.env.PORT || 3000;
 
-let isScraping = false;
+// ---------- HEALTH CHECK ----------
+app.get("/", (req, res) => {
+  res.json({
+    status: "OK",
+    message: "Gold Scraper Running",
+    time: new Date().toISOString(),
+  });
+});
 
-/**
- * SAFE SCRAPER (ROBUST + DEBUG + FALLBACK)
- */
-async function scrape() {
-  if (isScraping) return;
-  isScraping = true;
+// ---------- MAIN SCRAPE ENDPOINT ----------
+app.get("/scrape", async (req, res) => {
+  let browser = null;
 
   try {
-    console.log("SCRAPE START (FINAL MODE)");
+    console.log("SCRAPE START");
 
-    const url =
-      "https://msgold.com.my/adminxsettings/__ajax2.php?fn=refg4&m=eval&f=&q=3825_1778727686_05a216ba187c04e146501316fdc220b3&seed=" +
-      Date.now();
-
-    const res = await axios.get(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://msgold.com.my/"
-      },
-      timeout: 15000
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+      ],
     });
 
-    const text = res.data;
+    const page = await browser.newPage();
 
-    // =========================
-    // PRIMARY PATTERN
-    // =========================
-    let match =
-      text.match(/updprc\('spn9','([^']+)'\)/) ||
+    const url = "https://msgold.com.my/";
 
-      // fallback (in case API format changed slightly)
-      text.match(/spn9['"]?\s*,\s*['"]([^'"]+)['"]/) ||
+    // IMPORTANT: avoid double navigation crash
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
 
-      text.match(/'spn9'.*?([0-9]+\.[0-9]+)/);
+    await page.waitForTimeout(3000);
 
-    if (!match) {
-      console.log("RAW RESPONSE (DEBUG):");
-      console.log(text.slice(0, 500)); // IMPORTANT DEBUG
+    // ---------- SAFE SCRAPE (NO PATTERN MATCHING) ----------
+    const result = await page.evaluate(() => {
+      const getText = (selector) => {
+        const el = document.querySelector(selector);
+        return el ? el.innerText.trim() : null;
+      };
 
-      throw new Error("Pattern not found (API changed or blocked)");
-    }
+      return {
+        spn9: getText("body")?.match(/SPN\s*9[^0-9]*([0-9,.]+)/i)?.[1] || null,
+        updated: new Date().toLocaleString(),
+        success: true,
+      };
+    });
 
-    cache = {
-      spn9: match[1],
-      updated: new Date().toLocaleString("en-MY", {
-        timeZone: "Asia/Kuala_Lumpur"
-      }),
-      success: true,
-      error: null
-    };
+    await browser.close();
 
-    console.log("SUCCESS:", cache);
+    console.log("SUCCESS:", result);
+    return res.json(result);
   } catch (err) {
-    console.log("ERROR:", err.message);
+    console.error("ERROR:", err.message);
 
-    // ❗ NEVER DELETE GOOD DATA
-    cache = {
-      ...cache,
+    if (browser) await browser.close();
+
+    return res.status(500).json({
+      spn9: null,
+      updated: new Date().toISOString(),
       success: false,
-      error: err.message
-    };
-  } finally {
-    isScraping = false;
+      error: err.message,
+    });
   }
-}
-
-/**
- * API (NO SCRAPING HERE)
- */
-app.get("/gold", (req, res) => {
-  res.json(cache);
 });
 
-app.get("/refresh", async (req, res) => {
-  await scrape();
-  res.json(cache);
-});
-
-app.get("/", (req, res) => {
-  res.send("Gold Scraper Running (FINAL STABLE MODE)");
-});
-
-/**
- * INITIAL + LOOP
- */
-scrape();
-
-// safer interval (NOT too aggressive for Render)
-setInterval(() => {
-  scrape().catch(() => {});
-}, 45000); // 45 seconds
-
-/**
- * START SERVER
- */
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("RUNNING ON PORT:", PORT);
+// ---------- RENDER PORT FIX ----------
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`RUNNING ON PORT: ${PORT}`);
 });
